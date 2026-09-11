@@ -1,0 +1,52 @@
+# OMPL 规划管线配置
+# 注意: move_group (humble) 从 ~ompl.* 读取这些键:
+#   ~ompl.planning_plugin   规划器管理器插件类
+#   ~ompl.request_adapters  请求适配器 (空格分隔)
+#   ~ompl.response_adapters 响应适配器
+#   ~ompl.planner_configs + ~ompl.<group>.* OMPL 接口参数
+planning_plugin: ompl_interface/OMPLPlanner
+request_adapters: >-
+    default_planner_request_adapters/FixWorkspaceBounds
+    default_planner_request_adapters/FixStartStateBounds
+    default_planner_request_adapters/FixStartStateCollision
+    default_planner_request_adapters/FixStartStatePathConstraints
+response_adapters: >-
+    default_planning_response_adapters/AddTimeOptimalParameterization
+    default_planning_response_adapters/ValidateSolution
+    default_planning_response_adapters/DisplayMotionPath
+planner_configs:
+  RRTConnectkConfigDefault:
+    type: geometric::RRTConnect
+    range: 0.0
+  RRTkConfigDefault:
+    type: geometric::RRT
+    range: 0.0
+    goal_bias: 0.05
+  RRTstarkConfigDefault:
+    type: geometric::RRTstar
+    range: 0.0
+    goal_bias: 0.05
+    delay_collision_checking: 1
+  ESTkConfigDefault:
+    type: geometric::EST
+    range: 0.0
+    goal_bias: 0.05
+
+arm:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+    - RRTkConfigDefault
+    - RRTstarkConfigDefault
+    - ESTkConfigDefault
+  projection_evaluator: joints(base_yaw_joint,arm_lift_joint,wrist_pitch_joint)
+  longest_valid_segment_fraction: 0.005
+  allowed_planning_time: 1.0
+
+gripper:
+  default_planner_config: RRTConnectkConfigDefault
+  planner_configs:
+    - RRTConnectkConfigDefault
+  projection_evaluator: joints(left_finger_joint,right_finger_joint)
+  longest_valid_segment_fraction: 0.005
+  allowed_planning_time: 0.5
