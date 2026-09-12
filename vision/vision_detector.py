@@ -9,8 +9,9 @@
 
 用法 (板子已连机器人热点, 手机 App 断开机器人):
     cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
-    ~/Team21/Team21/bin/python3 real/vision_detector.py
-    ~/Team21/Team21/bin/python3 real/vision_detector.py --conf 0.35 --resolution 720p
+    ~/Team21/Team21/bin/python3 vision/vision_detector.py
+    ~/Team21/Team21/bin/python3 vision/vision_detector.py --conf 0.35 --resolution 720p
+    默认引擎 FP16 (~30fps); 换 FP32: --engine ~/Team21/vision/yolov8s_fp32.engine
 
 不用 source ROS: 脚本自己把 /opt/ros/humble 加进 sys.path/LD_LIBRARY_PATH
 (rclpy 的原生库需要 LD_LIBRARY_PATH)。numpy/cv2 在加 ROS 路径之前先导入,
@@ -360,8 +361,9 @@ def _run():
     ap = argparse.ArgumentParser(description="SDK 相机 + TensorRT 检测节点")
     ap.add_argument("--engine",
                     default=os.path.expanduser(
-                        "~/Team21/vision/yolov8s_fp32.engine"),
-                    help="TensorRT 引擎路径")
+                        "~/Team21/vision/yolov8s_fp16.engine"),
+                    help="TensorRT 引擎路径 (2026-09-13 实机 A/B 后定 FP16 "
+                         "为默认; 要更稳的置信度可换 yolov8s_fp32.engine)")
     ap.add_argument("--conf", type=float, default=CONF_THRESH,
                     help="置信度阈值 (默认 0.5, 效果不稳可降到 0.35)")
     ap.add_argument("--resolution", default="360p",

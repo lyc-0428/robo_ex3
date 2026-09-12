@@ -22,6 +22,9 @@
 #    m.export(format='onnx', opset=12, simplify=True, imgsz=640)
 
 # 2. 传到板子 ~/Team21/vision/ 后构建引擎 (约 5 分钟, 板子专属, 换板必须重建):
+#    验收用 FP16 (2026-09-13 实机 A/B: FP16 更快且置信度无明显下降);
+#    FP32 一并构建留作高置信度备份:
+~/Team21/Team21/bin/python3 build_engine.py bottle_tennisball_best.onnx yolov8s_fp16.engine
 ~/Team21/Team21/bin/python3 build_engine.py --fp32 bottle_tennisball_best.onnx yolov8s_fp32.engine
 
 # 3. 冒烟测试 (不用连机器人):
@@ -29,7 +32,7 @@
 
 # 4. 真机运行 (板子连机器人热点 RMEP-21bdc0, 手机 App 断开机器人):
 cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
-~/Team21/Team21/bin/python3 vision/vision_detector.py            # 默认 conf 0.5, 360p
+~/Team21/Team21/bin/python3 vision/vision_detector.py            # 默认 FP16 引擎, conf 0.5, 360p
 ~/Team21/Team21/bin/python3 vision/vision_detector.py --conf 0.35 --resolution 720p
 ```
 
@@ -54,8 +57,9 @@ cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
 
 - FP32 引擎: 推理 56~84ms (平均 ~70ms, 约 14fps), 置信度稳定 —
   真机 21 分钟连续跑: bottle 0.83~0.94, tennis_ball 0.89~0.93, 多目标同框正常。
-- FP16 引擎: 冒烟实测稳态 **29.7ms** (约 2.4 倍速, 推理已超相机 30fps)。
-  置信度理论上略有损失, 建议实机 A/B 对比后再定验收用哪个 (`--engine` 参数切换)。
+- FP16 引擎: 冒烟实测稳态 **29.7ms** (约 2.4 倍速, 推理已超相机 30fps);
+  **2026-09-13 实机 A/B 确认 FP16 效果更好, 定为默认验收引擎**。
+  FP32 保留作高置信度备份 (`--engine` 切换)。
 - 板子功率档 25W (默认); 切 40W MAXN 还能再快 20-30% 但需 sudo+重启,
   小组实验用不上 (2026-09-13 与用户确认不动系统设置)。
 - 360p 即可: 模型输入固定 640x640, 提相机分辨率只增加解码负担, 不提升检测。
