@@ -280,9 +280,13 @@ def _run():
     except Exception as e:
         print(f"ERROR: SDK 初始化异常 (机器人没开机 / 热点没连): "
               f"{type(e).__name__}: {e}")
+        print("回退到明文 SDK 探针 ...")
+        text_sdk_fallback()
         sys.exit(1)
     if not initialized:
         print("ERROR: SDK 初始化失败 (机器人没开机 / 热点没连)")
+        print("回退到明文 SDK 探针 ...")
+        text_sdk_fallback()
         sys.exit(1)
 
     ok = ep.camera.start_video_stream(display=False, resolution="360p")

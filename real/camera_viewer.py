@@ -123,7 +123,7 @@ def _run():
     print(f"current wifi: {ssid!r}")
     if not ssid.startswith("RMEP"):
         print("ERROR: 板子当前不在机器人热点上, 中止。")
-        print("       先开机机器人, 然后执行: nmcli connection up RMEP-21bbc5")
+        print("       先开机机器人, 然后执行: nmcli connection up RMEP-21bdc0  (新中控的热点)")
         sys.exit(1)
 
     from robomaster import robot
