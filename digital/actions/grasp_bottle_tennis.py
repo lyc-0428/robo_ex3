@@ -1,80 +1,363 @@
 #!/usr/bin/env python3
-"""Run two EP1 pickup modes: legacy bottle, then low-level tennis ball."""
+"""Vision-guided four-object sorting with the two calibrated EP1 grasps."""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
+from collections import deque
+import json
+import math
 from pathlib import Path
+import shutil
+import time
 
 import rclpy
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
+from sensor_msgs.msg import CameraInfo
+from std_msgs.msg import String
 
 from grasp_cube import GraspActionError, GraspCubeAction, POSITION_JOINTS
-
-
-WORLD_REMOVE_SERVICE = "/world/pick_place/remove"
-REMOTE_MODEL_ROOT = (
-    "/home/nvidia/robomaster_ep_static_gripper_fixed_20260910_122551/src"
+from vision_common import (
+    BOTTLE,
+    TENNIS,
+    angle_to_steps,
+    canonical_class,
+    horizontal_angle_radians,
+    placement_step,
+    stable_center_detection,
 )
 
 
 class GraspBottleTennisAction(GraspCubeAction):
+    """Sort four objects using camera classification, never spawn metadata."""
+
     def __init__(self):
         super().__init__()
-        self.run_count = 2
+        self.run_count = 4
         self.spawn_test_cube = False
-        self.place_points = [self.place_points[0], self.place_points[0]]
 
-        # The bottle keeps the original experiment2 arm motion.  Only the
-        # tennis-ball round switches to the lower, level pickup configuration.
+        # Preserve the two user-calibrated grasp modes.
         self.bottle_arm_2_delta = self.arm_2_delta
         self.tennis_arm_2_delta = -0.78
         self._use_tennis_grasp = False
         self.turn_steps = 2500
 
-        self.declare_parameter("model_root", REMOTE_MODEL_ROOT)
-        self.declare_parameter("bottle_name", "task_water_bottle")
-        self.declare_parameter("tennis_name", "task_tennis_ball")
-        self.declare_parameter("bottle_mass", 0.20)
-        self.declare_parameter("tennis_mass", 0.057)
-        self.declare_parameter("object_friction", 5.0)
-        # 333 calibrated 1 ms wheel steps at 3 rad/s and a 0.05 m wheel
-        # radius move the chassis forward by approximately 0.05 m.
+        self.declare_parameter("detection_timeout_seconds", 10.0)
+        self.declare_parameter("stable_window_frames", 5)
+        self.declare_parameter("stable_required_frames", 3)
+        self.declare_parameter("stable_center_spread_px", 90.0)
+        self.declare_parameter("alignment_tolerance_px", 24.0)
+        # Jetson live calibration: use half the original angular gain.  The
+        # camera image moves opposite to the chassis yaw command, so visual
+        # corrections invert the geometric image angle below.
+        self.declare_parameter("alignment_steps_per_radian", 167.1125)
+        self.declare_parameter("max_alignment_corrections", 3)
+        self.declare_parameter("max_grasp_retries", 2)
+        self.declare_parameter("minimum_wheel_command_seconds", 0.20)
         self.declare_parameter("forward_approach_steps", 333)
+        self.declare_parameter("bottle_place_steps", [2350, 2500, 2650])
+        self.declare_parameter("tennis_place_steps", [2350, 2500, 2650])
+        self.declare_parameter("controller_ready_file", "")
+        self.declare_parameter("scene_ready_file", "")
+        self.declare_parameter("scene_ready_timeout_seconds", 60.0)
 
-        self.model_root = Path(
-            str(self.get_parameter("model_root").value)
-        ).expanduser()
-        self.bottle_name = str(self.get_parameter("bottle_name").value)
-        self.tennis_name = str(self.get_parameter("tennis_name").value)
-        self.bottle_mass = float(self.get_parameter("bottle_mass").value)
-        self.tennis_mass = float(self.get_parameter("tennis_mass").value)
-        self.object_friction = float(
-            self.get_parameter("object_friction").value
+        self.detection_timeout = float(
+            self.get_parameter("detection_timeout_seconds").value
+        )
+        self.stable_window_frames = int(
+            self.get_parameter("stable_window_frames").value
+        )
+        self.stable_required_frames = int(
+            self.get_parameter("stable_required_frames").value
+        )
+        self.stable_center_spread_px = float(
+            self.get_parameter("stable_center_spread_px").value
+        )
+        self.alignment_tolerance_px = float(
+            self.get_parameter("alignment_tolerance_px").value
+        )
+        self.alignment_steps_per_radian = float(
+            self.get_parameter("alignment_steps_per_radian").value
+        )
+        self.max_alignment_corrections = int(
+            self.get_parameter("max_alignment_corrections").value
+        )
+        self.max_grasp_retries = int(
+            self.get_parameter("max_grasp_retries").value
+        )
+        self.minimum_wheel_command_duration = float(
+            self.get_parameter("minimum_wheel_command_seconds").value
         )
         self.forward_approach_steps = int(
             self.get_parameter("forward_approach_steps").value
         )
+        self.bottle_place_steps = list(
+            self.get_parameter("bottle_place_steps").value
+        )
+        self.tennis_place_steps = list(
+            self.get_parameter("tennis_place_steps").value
+        )
+        self.controller_ready_file = str(
+            self.get_parameter("controller_ready_file").value
+        )
+        self.scene_ready_file = str(self.get_parameter("scene_ready_file").value)
+        self.scene_ready_timeout = float(
+            self.get_parameter("scene_ready_timeout_seconds").value
+        )
 
+        if not self.stable_window_frames >= self.stable_required_frames >= 1:
+            raise GraspActionError("stable window must be >= required frames >= 1")
         if min(
-            self.bottle_mass,
-            self.tennis_mass,
-            self.object_friction,
+            self.detection_timeout,
+            self.stable_center_spread_px,
+            self.alignment_tolerance_px,
+            self.alignment_steps_per_radian,
+            self.minimum_wheel_command_duration,
         ) <= 0.0:
-            raise GraspActionError(
-                "bottle_mass、tennis_mass 和 object_friction 必须大于零"
+            raise GraspActionError("vision timing and alignment values must be positive")
+        if min(
+            self.max_alignment_corrections,
+            self.max_grasp_retries + 1,
+            self.forward_approach_steps,
+        ) < 1:
+            raise GraspActionError("vision retries and forward steps are invalid")
+        for sequence in (self.bottle_place_steps, self.tennis_place_steps):
+            placement_step(sequence, 0)
+
+        self.camera_width = None
+        self.camera_focal_x = None
+        self.camera_principal_x = None
+        self.detection_frames = deque(maxlen=self.stable_window_frames)
+        self.last_detection_frame_number = -1
+        self.create_subscription(
+            CameraInfo,
+            "/camera/camera_info",
+            self._camera_info_callback,
+            qos_profile_sensor_data,
+        )
+        self.create_subscription(String, "/detections", self._detection_callback, 10)
+
+        self.category_counts = {BOTTLE: 0, TENNIS: 0}
+        self._current_class = None
+        self._alignment_steps = 0
+        self._placement_relative_steps = 0
+        self._forward_offset_active = False
+        self._active_initial_positions = None
+
+    @staticmethod
+    def _write_ready_file(path_text):
+        if path_text:
+            path = Path(path_text)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("ready\n", encoding="utf-8")
+
+    def _wait_for_scene_ready(self):
+        if not self.scene_ready_file:
+            return
+        deadline = time.monotonic() + self.scene_ready_timeout
+        scene_path = Path(self.scene_ready_file)
+        while rclpy.ok() and time.monotonic() < deadline:
+            if scene_path.is_file():
+                self._publish_status("SORTING SCENE READY FOR VISION")
+                return
+            rclpy.spin_once(self, timeout_sec=0.10)
+        raise GraspActionError(
+            f"sorting scene was not ready within {self.scene_ready_timeout:.1f} s"
+        )
+
+    def _camera_info_callback(self, message):
+        if message.width <= 0 or len(message.k) < 9 or message.k[0] <= 0.0:
+            return
+        self.camera_width = int(message.width)
+        self.camera_focal_x = float(message.k[0])
+        self.camera_principal_x = float(message.k[2])
+
+    def _detection_callback(self, message):
+        try:
+            payload = json.loads(message.data)
+            frame_number = int(payload["frame"])
+            if frame_number <= self.last_detection_frame_number:
+                return
+            clean = []
+            for detection in payload.get("detections", []):
+                task_class = canonical_class(detection.get("class_name", ""))
+                bbox = detection.get("bbox", {})
+                if task_class is None or not all(
+                    key in bbox for key in ("x1", "y1", "x2", "y2")
+                ):
+                    continue
+                item = dict(detection)
+                item["class_name"] = task_class
+                clean.append(item)
+            self.detection_frames.append(clean)
+            self.last_detection_frame_number = frame_number
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            self.get_logger().warning(f"ignored malformed /detections message: {error}")
+
+    def _wait_for_camera_info(self):
+        deadline = time.monotonic() + self.detection_timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.10)
+            if self.camera_focal_x is not None:
+                self._publish_status(
+                    "CAMERA INFO READY | "
+                    f"width={self.camera_width} fx={self.camera_focal_x:.2f} "
+                    f"cx={self.camera_principal_x:.2f}"
+                )
+                return
+        raise GraspActionError(
+            "no /camera/camera_info received; check the Gazebo sensor and bridge"
+        )
+
+    def _wait_for_detector_stream(self):
+        """Wait for one YOLO result frame after Gazebo has been unpaused."""
+        deadline = time.monotonic() + self.detection_timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.10)
+            if self.last_detection_frame_number >= 0:
+                self._publish_status(
+                    "DETECTOR STREAM READY | "
+                    f"frame={self.last_detection_frame_number}"
+                )
+                return
+        raise GraspActionError(
+            "no /detections frames received after Gazebo started running; "
+            "check CAMERA FRAME READY and YOLO inference errors"
+        )
+
+    def _wait_stable_detection(self, preferred_class=None):
+        self.detection_frames.clear()
+        deadline = time.monotonic() + self.detection_timeout
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.10)
+            detection = stable_center_detection(
+                list(self.detection_frames),
+                self.camera_principal_x,
+                required_votes=self.stable_required_frames,
+                preferred_class=preferred_class,
+                max_center_spread_px=self.stable_center_spread_px,
+                selection="leftmost",
             )
-        if self.forward_approach_steps < 1:
-            raise GraspActionError("forward_approach_steps 必须大于零")
+            if detection is not None:
+                self._publish_status(
+                    "VISION LOCK | "
+                    f"class={detection['class_name']} | "
+                    f"confidence={detection['confidence']:.3f} | "
+                    f"stable={detection['stable_votes']}/{self.stable_window_frames} | "
+                    "tracking=leftmost"
+                )
+                return detection
+        class_text = preferred_class or "bottle/tennis"
+        raise GraspActionError(
+            f"no stable {class_text} detection within {self.detection_timeout:.1f} s"
+        )
+
+    def _wheel_motion_profile(self, steps):
+        """Preserve calibrated travel while respecting the 100 Hz control loop."""
+        nominal_duration = (
+            abs(int(steps)) * self.physics_step_seconds / self.speed_scale
+        )
+        duration = max(nominal_duration, self.minimum_wheel_command_duration)
+        command_speed = self.wheel_speed * nominal_duration / duration
+        return command_speed, duration
+
+    def _wheel_positions(self):
+        if self.latest_joint_state is None:
+            return None
+        values = dict(
+            zip(self.latest_joint_state.name, self.latest_joint_state.position)
+        )
+        names = (
+            "front_left_wheel_joint",
+            "front_right_wheel_joint",
+            "rear_left_wheel_joint",
+            "rear_right_wheel_joint",
+        )
+        if not all(name in values for name in names):
+            return None
+        return tuple(float(values[name]) for name in names)
+
+    def _rotate_by_steps(self, held_positions, signed_steps, label):
+        signed_steps = int(signed_steps)
+        if signed_steps == 0:
+            return
+        direction = 1.0 if signed_steps > 0 else -1.0
+        command_speed, duration = self._wheel_motion_profile(signed_steps)
+        wheel_command = [
+            -direction * command_speed,
+            direction * command_speed,
+            -direction * command_speed,
+            direction * command_speed,
+        ]
+        self._publish_status(
+            f"{label} | signed_steps={signed_steps} | "
+            f"wheel_speed={command_speed:.3f} | sim_duration={duration:.3f}s"
+        )
+        positions_before = self._wheel_positions()
+        try:
+            def keep_turning(ratio):
+                if ratio >= 1.0:
+                    return
+                self._publish(held_positions, repeat=1)
+                self._publish_to(self.wheel_publisher, wheel_command, repeat=1)
+
+            self._wait_sim_duration(duration, callback=keep_turning)
+        finally:
+            self._publish_to(self.wheel_publisher, [0.0] * 4, repeat=10)
+            self._publish(held_positions, repeat=10)
+        self._wait_sim_duration(self.post_turn_settle_duration)
+        positions_after = self._wheel_positions()
+        if positions_before is not None and positions_after is not None:
+            deltas = tuple(
+                after - before
+                for before, after in zip(positions_before, positions_after)
+            )
+            self._publish_status(
+                "WHEEL MOTION FEEDBACK | joint_delta="
+                + ",".join(f"{value:.4f}" for value in deltas)
+            )
+
+    def _align_to_visual_target(self, held_positions):
+        detection = self._wait_stable_detection()
+        target_class = detection["class_name"]
+        self._alignment_steps = 0
+        for correction in range(self.max_alignment_corrections + 1):
+            center_x = (
+                float(detection["bbox"]["x1"])
+                + float(detection["bbox"]["x2"])
+            ) * 0.5
+            error_px = center_x - self.camera_principal_x
+            if abs(error_px) <= self.alignment_tolerance_px:
+                self._publish_status(
+                    "TARGET ALIGNED | "
+                    f"class={target_class} | error_px={error_px:.1f} | "
+                    f"total_steps={self._alignment_steps}"
+                )
+                return target_class
+            if correction >= self.max_alignment_corrections:
+                break
+            angle = horizontal_angle_radians(
+                detection, self.camera_focal_x, self.camera_principal_x
+            )
+            steps = -angle_to_steps(angle, self.alignment_steps_per_radian)
+            if steps == 0:
+                steps = -1 if error_px > 0.0 else 1
+            self._rotate_by_steps(
+                held_positions,
+                steps,
+                f"VISION ALIGN {correction + 1}/{self.max_alignment_corrections} | "
+                f"error_px={error_px:.1f} | angle_deg={math.degrees(angle):.2f}",
+            )
+            self._alignment_steps += steps
+            detection = self._wait_stable_detection(preferred_class=target_class)
+        raise GraspActionError(
+            f"unable to center {target_class} within {self.alignment_tolerance_px:.1f} px"
+        )
 
     def _arm_pose(self, initial, fraction):
         pose = super()._arm_pose(initial, fraction)
         index = {name: i for i, name in enumerate(POSITION_JOINTS)}
-
-        # arm_1 and arm_2 now produce 0.60 rad of downward gripper pitch at
-        # full extension.  Counter-rotate the wrist by the same amount so the
-        # gripper stays level throughout the approach without changing height.
+        # The bottle sum is zero, so its experiment2 wrist does not change.
         pitch_delta = self.arm_extend_delta + self.arm_2_delta
         pose[index["endpoint_bracket_joint"]] -= pitch_delta * fraction
         return pose
@@ -83,9 +366,6 @@ class GraspBottleTennisAction(GraspCubeAction):
     def _vertical_clearance_pose(source, initial):
         index = {name: i for i, name in enumerate(POSITION_JOINTS)}
         pose = list(source)
-
-        # This pose is an IK solution approximately 50 mm directly above the
-        # pickup pose: x changes by less than 0.1 mm and the gripper stays level.
         pose[index["arm_1_joint"]] = initial[index["arm_1_joint"]] + 1.020
         pose[index["arm_2_joint"]] = initial[index["arm_2_joint"]] - 0.568
         pose[index["endpoint_bracket_joint"]] = (
@@ -97,19 +377,14 @@ class GraspBottleTennisAction(GraspCubeAction):
         if (
             label == "释放后抬臂离开"
             and self._use_tennis_grasp
-            and hasattr(self, "_active_initial_positions")
+            and self._active_initial_positions is not None
         ):
             initial = self._active_initial_positions
             index = {name: i for i, name in enumerate(POSITION_JOINTS)}
             clearance = self._vertical_clearance_pose(start, initial)
-            retracted = self._gripper_pose(
-                initial, initial, index, opened=True
-            )
+            retracted = self._gripper_pose(initial, initial, index, opened=True)
             super()._move("释放后先垂直抬高 5 cm", start, clearance)
             super()._move("抬高后向后收回机械臂", clearance, retracted)
-
-            # The base routine publishes and returns this list after _move().
-            # Keep its bookkeeping consistent with the substituted trajectory.
             target[:] = retracted
             return
         super()._move(label, start, target)
@@ -117,198 +392,30 @@ class GraspBottleTennisAction(GraspCubeAction):
     def _safe_home_pose(self, initial, current, index):
         if not self._use_tennis_grasp:
             return super()._safe_home_pose(initial, current, index)
-
-        current_open = self._gripper_pose(
-            current, initial, index, opened=True
-        )
+        current_open = self._gripper_pose(current, initial, index, opened=True)
         self._move_gripper("安全张开夹爪", current, current_open)
         clearance = self._vertical_clearance_pose(current_open, initial)
         super()._move("异常回收：先垂直抬高", current_open, clearance)
-        home_open = self._gripper_pose(
-            initial, initial, index, opened=True
-        )
+        home_open = self._gripper_pose(initial, initial, index, opened=True)
         super()._move("异常回收：抬高后向后收臂", clearance, home_open)
         self._settle(home_open)
-        self._publish_status(
-            "SAFE HOME COMPLETE: lifted first, then retracted"
-        )
+        self._publish_status("SAFE HOME COMPLETE: lifted first, then retracted")
         return home_open
 
-    def _run_once(self, attempt, initial, current, index):
-        self._active_initial_positions = list(initial)
-        return super()._run_once(attempt, initial, current, index)
-
-    def _resource_uri(self, relative_path):
-        path = (self.model_root / relative_path).resolve()
-        if not path.is_file():
-            raise GraspActionError(f"找不到模型资源：{path}")
-        return path.as_uri()
-
-    def _bottle_sdf(self):
-        visual_scale = 0.65
-        radius = 0.05445 * visual_scale
-        length = 0.26044 * visual_scale
-        mass = self.bottle_mass
-        ixy = mass * (3.0 * radius**2 + length**2) / 12.0
-        izz = 0.5 * mass * radius**2
-        mesh_uri = self._resource_uri(
-            "water_bottle/meshes/WaterBottle_fortress.obj"
-        )
-        return f"""<?xml version="1.0"?>
-<sdf version="1.7">
-  <model name="{self.bottle_name}">
-    <static>false</static>
-    <link name="bottle_link">
-      <inertial>
-        <mass>{mass:.9f}</mass>
-        <inertia>
-          <ixx>{ixy:.12f}</ixx><iyy>{ixy:.12f}</iyy>
-          <izz>{izz:.12f}</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
-      </inertial>
-      <collision name="bottle_collision">
-        <geometry>
-          <cylinder><radius>{radius}</radius><length>{length}</length></cylinder>
-        </geometry>
-        <surface>
-          <friction>
-            <ode><mu>{self.object_friction}</mu><mu2>{self.object_friction}</mu2></ode>
-          </friction>
-          <contact><ode><kp>100000</kp><kd>10</kd></ode></contact>
-        </surface>
-      </collision>
-      <visual name="bottle_visual">
-        <geometry>
-          <mesh><uri>{mesh_uri}</uri><scale>{visual_scale} {visual_scale} {visual_scale}</scale></mesh>
-        </geometry>
-      </visual>
-    </link>
-  </model>
-</sdf>
-"""
-
-    def _tennis_sdf(self):
-        radius = 0.0335
-        mass = self.tennis_mass
-        inertia = 0.4 * mass * radius**2
-        mesh_uri = self._resource_uri("056_tennis_ball/textured.obj")
-        return f"""<?xml version="1.0"?>
-<sdf version="1.7">
-  <model name="{self.tennis_name}">
-    <static>false</static>
-    <link name="tennis_link">
-      <gravity>false</gravity>
-      <inertial>
-        <mass>{mass:.9f}</mass>
-        <inertia>
-          <ixx>{inertia:.12f}</ixx><iyy>{inertia:.12f}</iyy>
-          <izz>{inertia:.12f}</izz>
-          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
-        </inertia>
-      </inertial>
-      <collision name="tennis_collision">
-        <geometry><sphere><radius>{radius}</radius></sphere></geometry>
-        <surface>
-          <friction>
-            <ode><mu>{self.object_friction}</mu><mu2>{self.object_friction}</mu2></ode>
-          </friction>
-          <contact><ode><kp>100000</kp><kd>10</kd></ode></contact>
-        </surface>
-      </collision>
-      <visual name="tennis_visual">
-        <pose>-0.0082115 0.044278 -0.0331315 0 0 0</pose>
-        <geometry><mesh><uri>{mesh_uri}</uri></mesh></geometry>
-      </visual>
-    </link>
-  </model>
-</sdf>
-"""
-
-    def _spawn_task_object(self, label, name, sdf_text, pose):
-        self._remove_task_object(name, required=False)
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="utf-8", suffix=".sdf", delete=False
-        ) as stream:
-            stream.write(sdf_text)
-            sdf_path = stream.name
-        try:
-            self._run(
-                [
-                    "ros2",
-                    "run",
-                    "ros_gz_sim",
-                    "create",
-                    "-world",
-                    "pick_place",
-                    "-name",
-                    name,
-                    "-file",
-                    sdf_path,
-                    "-x",
-                    str(pose[0]),
-                    "-y",
-                    str(pose[1]),
-                    "-z",
-                    str(pose[2]),
-                ],
-                timeout=30.0,
-            )
-        finally:
-            Path(sdf_path).unlink(missing_ok=True)
-        self._publish_status(
-            f"TASK OBJECT READY | {label} | name={name} | "
-            f"position=({pose[0]:.6f},{pose[1]:.6f},{pose[2]:.3f})"
-        )
-
-    def _remove_task_object(self, name, required=True):
-        result = self._run(
-            [
-                "ign",
-                "service",
-                "-s",
-                WORLD_REMOVE_SERVICE,
-                "--reqtype",
-                "ignition.msgs.Entity",
-                "--reptype",
-                "ignition.msgs.Boolean",
-                "--timeout",
-                str(self.world_service_timeout_ms),
-                "--req",
-                f'name: "{name}"',
-            ],
-            check=False,
-            timeout=self.world_service_timeout_ms / 1000.0 + 5.0,
-            log=False,
-        )
-        removed = (
-            result.returncode == 0
-            and "data: true" in result.stdout.lower()
-        )
-        if required and not removed:
-            raise GraspActionError(
-                f"无法移除上一轮物体 {name}：{result.stdout.strip()}"
-            )
-        return removed
-
-    def _move_chassis_forward(self, held_positions):
-        wheel_command = [self.wheel_speed] * 4
-        duration = (
+    def _move_chassis_linear(self, held_positions, forward):
+        direction = 1.0 if forward else -1.0
+        command_speed, duration = self._wheel_motion_profile(
             self.forward_approach_steps
-            * self.physics_step_seconds
-            / self.speed_scale
         )
-        self._publish_status(
-            "PREP: MOVE CHASSIS FORWARD ABOUT 5 CM FOR EXTRA REACH"
-        )
+        wheel_command = [direction * command_speed] * 4
+        label = "FORWARD 5 CM" if forward else "RESTORE BACKWARD 5 CM"
+        self._publish_status(f"TENNIS CHASSIS {label}")
         try:
             def keep_moving(ratio):
                 if ratio >= 1.0:
                     return
                 self._publish(held_positions, repeat=1)
-                self._publish_to(
-                    self.wheel_publisher, wheel_command, repeat=1
-                )
+                self._publish_to(self.wheel_publisher, wheel_command, repeat=1)
 
             self._wait_sim_duration(duration, callback=keep_moving)
         finally:
@@ -316,51 +423,70 @@ class GraspBottleTennisAction(GraspCubeAction):
             self._publish(held_positions, repeat=10)
         self._wait_sim_duration(self.post_turn_settle_duration)
 
-    def _restore_chassis_heading(self, held_positions):
-        reverse_wheel_command = [
-            self.wheel_speed,
-            -self.wheel_speed,
-            self.wheel_speed,
-            -self.wheel_speed,
-        ]
-        turn_duration = (
-            self.turn_steps
-            * self.physics_step_seconds
-            / self.speed_scale
+    def _rotate_chassis(self, held_positions):
+        if self._current_class not in (BOTTLE, TENNIS):
+            raise GraspActionError("placement requested without a vision class")
+        sequence = (
+            self.bottle_place_steps
+            if self._current_class == BOTTLE
+            else self.tennis_place_steps
         )
-        self._publish_status(
-            "BETWEEN ROUNDS: RESTORE INITIAL CHASSIS HEADING"
+        magnitude = placement_step(
+            sequence, self.category_counts[self._current_class]
         )
-        try:
-            def keep_turning(ratio):
-                if ratio >= 1.0:
-                    return
-                self._publish(held_positions, repeat=1)
-                self._publish_to(
-                    self.wheel_publisher,
-                    reverse_wheel_command,
-                    repeat=1,
-                )
+        # Positive is robot-right and negative is robot-left.
+        desired_absolute = magnitude if self._current_class == BOTTLE else -magnitude
+        self._placement_relative_steps = desired_absolute - self._alignment_steps
+        zone = (
+            "RIGHT BOTTLE ZONE"
+            if self._current_class == BOTTLE
+            else "LEFT TENNIS ZONE"
+        )
+        self._rotate_by_steps(
+            held_positions,
+            self._placement_relative_steps,
+            f"TURN TO {zone}",
+        )
 
-            self._wait_sim_duration(turn_duration, callback=keep_turning)
-        finally:
-            self._publish_to(self.wheel_publisher, [0.0] * 4, repeat=10)
-            self._publish(held_positions, repeat=10)
-        self._wait_sim_duration(self.post_turn_settle_duration)
+    def _run_once(self, attempt, initial, current, index):
+        self._active_initial_positions = list(initial)
+        return super()._run_once(attempt, initial, current, index)
+
+    def _prepare_observation_pose(self, initial, current, index):
+        observation = self._gripper_pose(initial, initial, index, opened=True)
+        if any(abs(a - b) > 1.0e-6 for a, b in zip(current, observation)):
+            self._move("机械臂回到固定摄像观察姿态", current, observation)
+            self._settle(observation)
+        return observation
+
+    def _restore_cycle_offsets(self, held_positions):
+        if self._placement_relative_steps:
+            self._rotate_by_steps(
+                held_positions,
+                -self._placement_relative_steps,
+                "RESTORE HEADING AFTER PLACEMENT",
+            )
+            self._placement_relative_steps = 0
+        if self._forward_offset_active:
+            self._move_chassis_linear(held_positions, forward=False)
+            self._forward_offset_active = False
+        if self._alignment_steps:
+            self._rotate_by_steps(
+                held_positions,
+                -self._alignment_steps,
+                "RESTORE CAMERA OBSERVATION HEADING",
+            )
+            self._alignment_steps = 0
 
     def run_action(self):
         if shutil.which("ros2") is None or shutil.which("ign") is None:
-            raise GraspActionError("找不到 ros2 或 ign，请先 source ROS 2 环境")
+            raise GraspActionError("ros2 or ign not found; source the Team21 environment")
 
         self.get_logger().info(
-            "TWO-OBJECT ACTION | round 1=legacy water-bottle grasp | "
-            "round 2=low-level tennis-ball grasp"
+            "VISION SORTING | four neutral objects | bottle=right | tennis=left"
         )
-        self.get_logger().info("准备 1/2：激活只读关节状态")
         self._ensure_broadcaster()
         initial = self._wait_for_joint_state()
-
-        self.get_logger().info("准备 2/2：原位锁定全部位置关节并启用车轮控制")
         self._ensure_hold_controller(initial)
         self._ensure_wheel_controller()
 
@@ -370,97 +496,87 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._publish_status("PREP: START CONTINUOUS GAZEBO EXECUTION")
         self._set_world_paused(False)
         self._wait_for_sim_time(after=previous_sim_time)
+        self._write_ready_file(self.controller_ready_file)
+        self._publish_status("ROBOT CONTROLLERS READY | continuous dynamic mode")
 
         index = {name: i for i, name in enumerate(POSITION_JOINTS)}
-        self._publish_status("PREP: OPEN GRIPPER BEFORE ALL STEPS")
-        startup_open = self._gripper_pose(
-            initial, initial, index, opened=True
-        )
-        self._move_gripper("开始所有步骤前先张开夹爪", initial, startup_open)
-        self._settle(startup_open)
+        current = self._gripper_pose(initial, initial, index, opened=True)
+        self._move_gripper("开始分类前张开夹爪", initial, current)
+        self._settle(current)
+        self._wait_for_scene_ready()
+        self._wait_for_camera_info()
+        self._wait_for_detector_stream()
 
-        tasks = (
-            (
-                "WATER BOTTLE",
-                self.bottle_name,
-                self._bottle_sdf,
-                (self.cube_x, self.cube_y, 0.085),
-            ),
-            (
-                "TENNIS BALL",
-                self.tennis_name,
-                self._tennis_sdf,
-                (self.cube_x, self.cube_y, 0.061),
-            ),
-        )
-
-        current = list(startup_open)
         success_count = 0
-        failed_count = 0
-        previous_name = None
+        try:
+            while success_count < self.run_count:
+                completed = False
+                for retry in range(self.max_grasp_retries + 1):
+                    current = self._prepare_observation_pose(initial, current, index)
+                    self._current_class = self._align_to_visual_target(current)
+                    self._use_tennis_grasp = self._current_class == TENNIS
+                    self.arm_2_delta = (
+                        self.tennis_arm_2_delta
+                        if self._use_tennis_grasp
+                        else self.bottle_arm_2_delta
+                    )
+                    self._placement_relative_steps = 0
+                    mode = (
+                        "LOW LEVEL HORIZONTAL TENNIS GRASP"
+                        if self._use_tennis_grasp
+                        else "ORIGINAL EXPERIMENT2 BOTTLE GRASP"
+                    )
+                    self._publish_status(
+                        f"OBJECT {success_count + 1}/{self.run_count} | retry={retry}/"
+                        f"{self.max_grasp_retries} | class={self._current_class} | {mode}"
+                    )
+                    if self._use_tennis_grasp:
+                        self._move_chassis_linear(current, forward=True)
+                        self._forward_offset_active = True
 
-        for attempt, (label, name, sdf_factory, pose) in enumerate(
-            tasks, start=1
-        ):
-            self._use_tennis_grasp = label == "TENNIS BALL"
-            self.arm_2_delta = (
-                self.tennis_arm_2_delta
-                if self._use_tennis_grasp
-                else self.bottle_arm_2_delta
-            )
-            grasp_mode = (
-                "LOWER LEVEL TENNIS GRASP"
-                if self._use_tennis_grasp
-                else "ORIGINAL EXPERIMENT2 BOTTLE GRASP"
-            )
-            self._publish_status(
-                f"ROUND {attempt}/2 GRASP MODE | {grasp_mode}"
-            )
+                    ok, current = self._run_once(
+                        success_count + 1, initial, current, index
+                    )
+                    current = list(self.last_position_command or current)
+                    self._restore_cycle_offsets(current)
+                    if ok:
+                        self.category_counts[self._current_class] += 1
+                        success_count += 1
+                        completed = True
+                        self._publish_status(
+                            "SORTED | "
+                            f"total={success_count}/{self.run_count} | bottles="
+                            f"{self.category_counts[BOTTLE]}/2 | tennis="
+                            f"{self.category_counts[TENNIS]}/2"
+                        )
+                        break
+                    self._publish_status(
+                        f"EMPTY GRASP | retry {retry + 1}/"
+                        f"{self.max_grasp_retries + 1}"
+                    )
+                if not completed:
+                    raise GraspActionError(
+                        "same target failed after two retries; refusing to guess or continue"
+                    )
 
-            if previous_name is not None:
-                self._publish_status(
-                    f"PREP ROUND {attempt}: REMOVE PREVIOUS {previous_name}"
+            if self.category_counts != {BOTTLE: 2, TENNIS: 2}:
+                raise GraspActionError(
+                    f"unexpected final class counts: {self.category_counts}"
                 )
-                self._remove_task_object(previous_name)
-                self._settle(current)
-                self._restore_chassis_heading(current)
-
-            self._publish_status(f"PREP ROUND {attempt}: CREATE {label}")
-            self._spawn_task_object(label, name, sdf_factory(), pose)
-            self._settle(current)
-
-            # Only the lower tennis pose loses forward arm reach.  Apply the
-            # compensating chassis approach after round-one heading recovery,
-            # immediately before the tennis pickup.
-            if self._use_tennis_grasp:
-                self._move_chassis_forward(current)
-
             self._publish_status(
-                f"ROUND {attempt}/2 START | target={label}"
+                "VISION SORTING COMPLETE | bottles=2 right | tennis=2 left | Gazebo pausing"
             )
-            ok, current = self._run_once(
-                attempt, initial, current, index
-            )
-            if not ok:
-                failed_count += 1
-                break
-            success_count += 1
-            previous_name = name
-
-            if attempt == 1 and self.cycle_pause_seconds > 0.0:
-                self._publish_status(
-                    "ROUND 1 BOTTLE COMPLETE | preparing tennis ball"
-                )
-                self._wait_sim_duration(self.cycle_pause_seconds)
-
-        self._publish_status(
-            f"FINAL RESULT | success: {success_count} | failed: "
-            f"{failed_count} | planned runs: 2"
-        )
-        if success_count == 2:
-            self._publish_status(
-                "TWO-OBJECT TASK COMPLETE | bottle then tennis ball"
-            )
+        except Exception:
+            current = list(self.last_position_command or current)
+            try:
+                current = self._safe_home_pose(initial, current, index)
+            except Exception as recovery_error:
+                self.get_logger().warning(f"arm recovery incomplete: {recovery_error}")
+            try:
+                self._restore_cycle_offsets(current)
+            except Exception as recovery_error:
+                self.get_logger().warning(f"chassis recovery incomplete: {recovery_error}")
+            raise
 
 
 def main(args=None):
@@ -477,7 +593,7 @@ def main(args=None):
         if node is not None:
             node.get_logger().error(str(error))
         else:
-            print(f"两物体动作启动失败：{error}")
+            print(f"vision sorting failed to start: {error}")
     finally:
         if node is not None:
             node.safe_stop()
