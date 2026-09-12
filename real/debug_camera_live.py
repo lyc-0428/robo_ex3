@@ -23,6 +23,8 @@ import traceback
 
 LOG_DIR = os.path.expanduser("~/Team21/logs")
 LOG_LINES = []
+_LIVE_PATH = None
+_LIVE_FILE = None
 
 # 打点计数器 (模块级, 各 hook 往里写)
 VIDEO = {"connect_40921": 0, "bytes": 0, "recv_calls": 0, "first": b""}
@@ -37,6 +39,13 @@ class _Tee:
         self.stream.write(text)
         if text.strip():
             LOG_LINES.append(text.rstrip("\n"))
+            # 实时落盘: 进程卡死/被强杀也能留下完整日志 (2026-09-13 踩过)
+            if _LIVE_FILE is not None:
+                try:
+                    _LIVE_FILE.write(text)
+                    _LIVE_FILE.flush()
+                except Exception:
+                    pass
         return len(text)
 
     def flush(self):
@@ -46,8 +55,22 @@ class _Tee:
         return getattr(self.stream, name)
 
 
+def _open_live_log():
+    global _LIVE_PATH, _LIVE_FILE
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        _LIVE_PATH = os.path.join(LOG_DIR, f"camera_live_debug_{stamp}.txt")
+        _LIVE_FILE = open(_LIVE_PATH, "w")
+    except Exception:
+        _LIVE_FILE = None
+
+
 def save_log():
     try:
+        if _LIVE_PATH:
+            print(f"调试日志已保存: {_LIVE_PATH}")
+            return
         os.makedirs(LOG_DIR, exist_ok=True)
         stamp = time.strftime("%Y%m%d_%H%M%S")
         path = os.path.join(LOG_DIR, f"camera_live_debug_{stamp}.txt")
@@ -354,17 +377,26 @@ def _run():
 
 
 def main():
+    _open_live_log()
     sys.stdout = _Tee(sys.stdout)
     sys.stderr = _Tee(sys.stderr)
+    code = 0
     try:
         _run()
+    except SystemExit as e:
+        code = e.code if isinstance(e.code, int) else 0
     except BaseException:
-        # 先把堆栈打进日志再抛出去, 否则 traceback 打印发生在 save_log 之后,
-        # 日志文件里会丢掉真正的报错内容 (2026-09-13 踩过)。
         traceback.print_exc()
+        code = 1
+    finally:
         save_log()
-        raise
-    save_log()
+        if _LIVE_FILE is not None:
+            try:
+                _LIVE_FILE.close()
+            except Exception:
+                pass
+        # SDK 的非守护线程会让解释器退出卡死 (2026-09-13 踩过), 直接硬退出
+        os._exit(code)
 
 
 if __name__ == "__main__":
