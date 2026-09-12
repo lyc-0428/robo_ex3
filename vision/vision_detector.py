@@ -487,6 +487,7 @@ def _run():
             # 必须 ascontiguousarray: [:, :, ::-1] 是负步长非连续视图,
             # cv2 5.x 的 putText 会报 "Layout incompatible" (2026-09-13 踩过)。
             bgr = np.ascontiguousarray(img[:, :, ::-1])
+            t_frame = time.time()
             t_infer = time.time()
             output, ratio, px, py = detector.infer(bgr)
             dets = TrtYOLO.postprocess(output, ratio, px, py,
@@ -494,7 +495,10 @@ def _run():
             dets = smoother.update(dets)
             infer_ms = (time.time() - t_infer) * 1000
 
-            fps_q.append(1.0 / max(1e-9, infer_ms))
+            # 整帧耗时 (取帧+推理+画框+发布), 毫秒 → fps 要乘 1000
+            # (之前 1.0/ms 忘了换算, FPS 永远显示 0.00, 2026-09-13 踩过)
+            loop_ms = (time.time() - t_frame) * 1000
+            fps_q.append(1000.0 / max(1e-9, loop_ms))
             avg_fps = sum(fps_q) / len(fps_q)
             publish({"objects": dets, "fps": round(avg_fps, 1)})
 
