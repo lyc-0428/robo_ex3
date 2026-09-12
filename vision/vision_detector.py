@@ -459,6 +459,7 @@ def _run():
     fps_q = deque(maxlen=30)
     smoother = TemporalSmoother()
     frames = 0
+    last_frames = 0
     first_saved = False
     t0 = time.time()
     last_heartbeat = t0
@@ -506,9 +507,12 @@ def _run():
             now = time.time()
             if now - t0 >= 2.0:
                 names = ",".join(f"{d['class']}:{d['conf']}" for d in dets)
-                print(f"fps={frames/(now-t0):.1f} 推理={infer_ms:.0f}ms "
-                      f"检测={names or '(无)'}")
+                # 真实帧率 = 本窗口帧数 / 窗口时长 (之前拿累计帧数除, 数字
+                # 一直在涨不是 fps, 2026-09-13 踩过)
+                print(f"fps={(frames-last_frames)/(now-t0):.1f} "
+                      f"推理={infer_ms:.0f}ms 检测={names or '(无)'}")
                 t0 = now
+                last_frames = frames
 
             if not first_saved and dets:
                 first_saved = True
