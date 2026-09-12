@@ -17,6 +17,7 @@
 import os
 import socket
 import sys
+import threading
 import time
 import traceback
 
@@ -117,6 +118,25 @@ def install_decoder_spy():
         return res
 
     libmedia_codec.H264Decoder.decode = counted_decode
+
+
+def cleanup_with_timeout(ep):
+    """SDK 的 stop_video_stream/close 可能卡死, 放守护线程里限时 5 秒。"""
+    def _clean():
+        try:
+            ep.camera.stop_video_stream()
+        except Exception as e:
+            print("stop_video_stream warning:", e)
+        try:
+            ep.close()
+        except Exception as e:
+            print("close warning:", e)
+
+    t = threading.Thread(target=_clean, daemon=True)
+    t.start()
+    t.join(5)
+    if t.is_alive():
+        print("WARN: SDK 清理超时 (>5s), 直接退出 (守护线程会被回收)")
 
 
 def setup_display():
@@ -297,8 +317,7 @@ def _run():
             cv2.imwrite(os.path.join(LOG_DIR, "live_frame0.png"), img)
             print("首帧已存 ~/Team21/logs/live_frame0.png")
 
-    ep.camera.stop_video_stream()
-    ep.close()
+    cleanup_with_timeout(ep)
 
     # D. imshow 自测 (主线程, 异常会直接打出来)
     disp_img = first_img if first_img is not None \
