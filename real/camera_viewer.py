@@ -8,10 +8,12 @@ v2: 不依赖 SDK 的后台显示线程 (display=True 换板后不弹窗, 且 st
   - av 17.1.0 + libmedia_codec.py 真解码器 (PyAV pts 递增)
   - opencv-python 5.x
 
-用法 (板子已连机器人热点, 已接显示器, 手机 App 必须断开机器人):
+用法:
     cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
-    ~/Team21/Team21/bin/python3 real/camera_viewer.py          # 默认 720p
-    ~/Team21/Team21/bin/python3 real/camera_viewer.py 360p     # 卡顿就用低分辨率
+    ~/Team21/Team21/bin/python3 real/camera_viewer.py --selftest   # 只测弹窗 (校园网下就行)
+    ~/Team21/Team21/bin/python3 real/camera_viewer.py 360p         # 连机器人热点后看直播
+    ~/Team21/Team21/bin/python3 real/camera_viewer.py              # 默认 720p
+手机 RoboMaster App 必须断开机器人 (视频流只给一个客户端)。
 
 日志: ~/Team21/logs/camera_viewer_<时间戳>.txt
 """
@@ -36,13 +38,15 @@ class _Tee:
         self.stream.write(text)
         if text.strip():
             LOG_LINES.append(text.rstrip("\n"))
-            # 实时落盘: 进程卡死/被强杀也能留下完整日志 (2026-09-13 踩过)
-            if _LIVE_FILE is not None:
-                try:
-                    _LIVE_FILE.write(text)
-                    _LIVE_FILE.flush()
-                except Exception:
-                    pass
+        # 实时落盘: 进程卡死/被强杀也能留下完整日志 (2026-09-13 踩过)。
+        # 必须写原始 text: print 会把分隔符/换行拆成单独一次 write,
+        # 之前被 text.strip() 挡掉, 导致日志文件里空格和换行全丢。
+        if _LIVE_FILE is not None:
+            try:
+                _LIVE_FILE.write(text)
+                _LIVE_FILE.flush()
+            except Exception:
+                pass
         return len(text)
 
     def flush(self):
@@ -136,10 +140,38 @@ def cleanup_with_timeout(ep):
 def _run():
     setup_display()
 
-    resolution = sys.argv[1] if len(sys.argv) > 1 else "720p"
+    # 防御: 用户 shell 可能 source 过 ROS, LD_LIBRARY_PATH/PYTHONPATH 会
+    # 顶掉 cv2 依赖的 Qt/numpy, 弹窗时出诡异问题 (2026-09-13 板子上踩过:
+    # 进程 100% CPU 空转在 namedWindow)。必须在 import cv2 之前清掉。
+    os.environ.pop("LD_LIBRARY_PATH", None)
+    os.environ.pop("PYTHONPATH", None)
+
+    import cv2
+    import numpy as np
+
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    resolution = args[0] if args else "720p"
     if resolution not in ("360p", "540p", "720p"):
         print(f"ERROR: 不支持的分辨率 {resolution!r}, 可选 360p/540p/720p")
         sys.exit(1)
+
+    # 先弹窗口、后连机器人: 窗口 1 秒内就该出现。
+    # 没出现 = 板子显示环境 (X/Qt) 卡死, 不用等机器人, 重启板子再试。
+    win_name = "RoboMaster LiveView"
+    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
+    black = np.zeros((360, 640, 3), np.uint8)
+    cv2.putText(black, "waiting robot...", (20, 200),
+                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+    cv2.imshow(win_name, black)
+    cv2.waitKey(1)
+    print(f"窗口 {win_name!r} 已创建 —— 显示器上应该已经能看到它。")
+    print("如果 5 秒内没看到窗口: Ctrl+C 退出, 重启板子再试 (显示环境卡死)。")
+
+    if "--selftest" in sys.argv:
+        print("selftest 模式: 3 秒后自动关窗口退出 (看到窗口 = 显示链路正常)。")
+        cv2.waitKey(3000)
+        cv2.destroyAllWindows()
+        return
 
     # 预检: 板子必须已连机器人热点
     ssid = current_wifi_ssid()
@@ -147,10 +179,10 @@ def _run():
     if not ssid.startswith("RMEP"):
         print("ERROR: 板子当前不在机器人热点上, 中止。")
         print("       先开机机器人, 然后执行: nmcli connection up RMEP-21bdc0  (新中控的热点)")
+        cv2.destroyAllWindows()
         sys.exit(1)
 
     from robomaster import robot
-    import cv2
 
     ep = robot.Robot()
     initialized = False
@@ -177,10 +209,7 @@ def _run():
         cleanup_with_timeout(ep)
         sys.exit(1)
 
-    print("视频流已开启。")
-    win_name = "RoboMaster LiveView"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    print(f"窗口 {win_name!r} 已创建, 等帧中 ...")
+    print("视频流已开启, 等帧中 ...")
 
     frames = 0
     first_saved = False
