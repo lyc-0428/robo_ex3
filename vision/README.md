@@ -1,5 +1,8 @@
 # vision —— 实验三视觉检测 (bottle / tennis_ball)
 
+> **视觉联动定点抓取 (实验升级)**: 见 [pick_place_README.md](pick_place_README.md)
+> — calibrate.py 标定 + vision_pick_place.py 一体化抓取, 含进度/移交清单。
+
 机器人云台相机 (robomaster SDK 取帧) + TensorRT YOLOv8s 推理 + cv2 实时窗口
 + ROS2 话题 `detections` (JSON String)。
 
