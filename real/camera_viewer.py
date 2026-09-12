@@ -153,13 +153,21 @@ def _run():
     import cv2
 
     ep = robot.Robot()
-    try:
-        initialized = ep.initialize(conn_type="ap")
-    except Exception as e:
-        print(f"ERROR: SDK 初始化异常, 中止: {type(e).__name__}: {e}")
-        sys.exit(1)
+    initialized = False
+    for attempt in range(1, 4):
+        try:
+            initialized = ep.initialize(conn_type="ap")
+        except Exception as e:
+            print(f"初始化第 {attempt} 次异常: {type(e).__name__}: {e}")
+        if initialized:
+            break
+        if attempt < 3:
+            print(f"初始化第 {attempt} 次失败, 5 秒后重试 "
+                  f"(WiFi 闪断时常见, 检查手机 WiFi 是否关掉) ...")
+            time.sleep(5)
     if not initialized:
-        print("ERROR: 连不上机器人, 检查机器人是否开机, 中止")
+        print("ERROR: 连不上机器人 (重试 3 次失败)。")
+        print("       检查: 机器人是否开机 / WiFi 是否闪断 / 手机是否占着热点")
         sys.exit(1)
 
     print(f"开启视频流 ({resolution}) ...")
