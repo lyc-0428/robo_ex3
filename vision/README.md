@@ -50,9 +50,12 @@ cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
   必须 `np.ascontiguousarray(...)`。
 - **SDK 帧是 RGB 不是 BGR** (libmedia_codec rgb24 直接 reshape)。
 
-## 性能 (2026-09-13 实测)
+## 性能 (2026-09-13 实测, Orin NX 25W 默认功率档)
 
-- FP32 引擎: 推理 85~95ms/帧 (约 11fps), 置信度稳定, 验收用。
-- 想要流畅可换 FP16 引擎 (`build_engine.py` 不带 `--fp32`), 约快一倍,
-  YOLOv8s 的 FP16 精度损失一般可接受, 建议实机对比后再定。
+- FP32 引擎: 推理 56~84ms (平均 ~70ms, 约 14fps), 置信度稳定 —
+  真机 21 分钟连续跑: bottle 0.83~0.94, tennis_ball 0.89~0.93, 多目标同框正常。
+- FP16 引擎: 约快一倍 (~35ms), YOLOv8s 的 FP16 精度损失一般可接受,
+  建议实机 A/B 对比后再定验收用哪个 (`--engine` 参数切换)。
+- 板子功率档 25W (默认); 切 40W MAXN 还能再快 20-30% 但需 sudo+重启,
+  小组实验用不上 (2026-09-13 与用户确认不动系统设置)。
 - 360p 即可: 模型输入固定 640x640, 提相机分辨率只增加解码负担, 不提升检测。
