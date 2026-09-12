@@ -1185,6 +1185,35 @@
     <parent link="gripper_link" />
     <child link="gripper_t_link" />
   </joint>
+  <gazebo reference="camera_link">
+    <sensor name="sorting_rgb_camera" type="camera">
+      <!--
+        Gazebo cameras look along their local +X axis. camera_link is mounted
+        with +1.6898531 rad about Y, so the old optical-frame pose made the
+        simulated sensor look along -Y. This pitch cancels that mount angle
+        and adds a downward view toward the six slots.
+        It changes only the virtual sensor ray direction, not the camera mesh
+        or any calibrated robot / gripper transform.
+      -->
+      <pose>__CAMERA_SENSOR_X__ 0 __CAMERA_SENSOR_Z__ 0 __CAMERA_SENSOR_PITCH__ 0</pose>
+      <always_on>true</always_on>
+      <update_rate>__CAMERA_FPS__</update_rate>
+      <visualize>true</visualize>
+      <topic>/camera/image_raw</topic>
+      <camera>
+        <horizontal_fov>__CAMERA_HFOV__</horizontal_fov>
+        <image>
+          <width>__CAMERA_WIDTH__</width>
+          <height>__CAMERA_HEIGHT__</height>
+          <format>R8G8B8</format>
+        </image>
+        <clip>
+          <near>__CAMERA_NEAR__</near>
+          <far>__CAMERA_FAR__</far>
+        </clip>
+      </camera>
+    </sensor>
+  </gazebo>
   <ros2_control name="GazeboSystem" type="system">
     <hardware>
       <plugin>gz_ros2_control/GazeboSimSystem</plugin>

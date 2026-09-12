@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""在不修改模型文件的前提下执行五次 ROS 2 搬运任务。
+"""在不修改模型文件的前提下执行连续动态 ROS 2 搬运任务。
 
 适用模型: robomaster_ep_static_gripper_fixed_20260910_122551
 
 安全策略:
-1. 仅在加载控制器时保持 Gazebo 暂停并执行少量启动单步。
-2. 控制器锁定全部关节后解除暂停，按 /joint_states 时间戳连续执行。
+1. Gazebo 从启动开始连续运行，控制器服务按正常 update loop 完成。
+2. 初始化阶段禁止 multi_step，避免位置保持生效前推进物理引擎。
 3. 只按动作需要改变主机械臂、夹爪根关节和四个轮关节。
 4. 结束或异常时先停止车轮、保持关节，再重新暂停 Gazebo。
 5. 临时控制器参数写到 /tmp；不读写 URDF、SDF 或模型目录。
@@ -24,14 +24,16 @@ from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
+from rcl_interfaces.srv import SetParameters
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Float64MultiArray, String
 
 
 WORLD_CONTROL_SERVICE = "/world/pick_place/control"
-ACTION_VERSION = "2026-09-11-task-points-v15"
+ACTION_VERSION = "2026-09-13-continuous-dynamic-v16"
 BROADCASTER = "joint_state_broadcaster"
 HOLD_CONTROLLER = "robomaster_position_hold_controller"
 HOLD_TOPIC = f"/{HOLD_CONTROLLER}/commands"
@@ -105,7 +107,22 @@ class FileMirroringLogger:
 
     def _emit(self, method, level, message):
         text = str(message)
-        getattr(self._ros_logger, method)(text)
+        # rclpy caches one severity per source call site. Calling different
+        # logger methods through one dynamic getattr line makes an INFO then
+        # ERROR from this wrapper raise "Logger severity cannot be changed".
+        # Keep every severity on its own source line.
+        if method == "debug":
+            self._ros_logger.debug(text)
+        elif method == "info":
+            self._ros_logger.info(text)
+        elif method == "warning":
+            self._ros_logger.warning(text)
+        elif method == "error":
+            self._ros_logger.error(text)
+        elif method == "fatal":
+            self._ros_logger.fatal(text)
+        else:
+            raise ValueError(f"unsupported log method: {method}")
         timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
         self._stream.write(f"{timestamp} [{level}] {text}\n")
         self._stream.flush()
@@ -184,7 +201,6 @@ class GraspCubeAction(Node):
         self.declare_parameter("physics_step_seconds", 0.001)
         self.declare_parameter("post_turn_settle_seconds", 0.30)
         self.declare_parameter("world_service_timeout_ms", 15000)
-        self.declare_parameter("step_retries", 2)
         self.declare_parameter("stop_on_empty_grasp", True)
         self.declare_parameter("grasp_position_tolerance", 0.02)
         self.declare_parameter("controller_timeout_seconds", 20.0)
@@ -270,7 +286,6 @@ class GraspCubeAction(Node):
         self.world_service_timeout_ms = int(
             self.get_parameter("world_service_timeout_ms").value
         )
-        self.step_retries = int(self.get_parameter("step_retries").value)
         self.stop_on_empty_grasp = bool(
             self.get_parameter("stop_on_empty_grasp").value
         )
@@ -329,14 +344,8 @@ class GraspCubeAction(Node):
             )
         if self.turn_steps < 1:
             raise GraspActionError("turn_steps 必须大于零")
-        if (
-            self.world_service_timeout_ms < 1000
-            or self.step_retries < 1
-        ):
-            raise GraspActionError(
-                "world service timeout 至少为 1000，"
-                "step_retries 至少为 1"
-            )
+        if self.world_service_timeout_ms < 1000:
+            raise GraspActionError("world service timeout 至少为 1000")
 
         self.latest_joint_state = None
         self.latest_sim_time = None
@@ -418,9 +427,37 @@ class GraspCubeAction(Node):
         return result
 
     def _controller_states(self):
-        result = self._run(
-            ["ros2", "control", "list_controllers"], timeout=10.0
-        )
+        """Read controller states without advancing Gazebo manually."""
+        command = ["ros2", "control", "list_controllers"]
+        result = None
+        for attempt in range(1, 4):
+            try:
+                result = self._run(
+                    command,
+                    check=False,
+                    timeout=max(10.0, self.controller_timeout),
+                )
+            except subprocess.TimeoutExpired:
+                if attempt < 3:
+                    self.get_logger().warning(
+                        f"list_controllers 查询超时，正在重试（{attempt}/3）"
+                    )
+                    continue
+                raise GraspActionError("list_controllers 连续 3 次查询超时")
+            if result.returncode == 0:
+                break
+            if attempt < 3:
+                self.get_logger().warning(
+                    "list_controllers 返回失败，"
+                    f"正在重试（{attempt}/3）：{result.stdout.strip()}"
+                )
+
+        if result is None or result.returncode != 0:
+            raise GraspActionError(
+                "list_controllers 连续 3 次失败："
+                + ("" if result is None else result.stdout.strip())
+            )
+
         states = {}
         for line in result.stdout.splitlines():
             # ros2 control 会按终端配置插入 ANSI 颜色码；若不清除，
@@ -433,52 +470,6 @@ class GraspCubeAction(Node):
                 if state in {"active", "inactive", "unconfigured", "finalized"}:
                     states[fields[0]] = state
         return states
-
-    def _step(self, count, allow_retry=True, timeout_ms=None):
-        """仅用于暂停状态下加载控制器的启动单步。"""
-        attempts = self.step_retries if allow_retry else 1
-        request_timeout_ms = (
-            self.world_service_timeout_ms
-            if timeout_ms is None
-            else int(timeout_ms)
-        )
-        command = [
-            "ign",
-            "service",
-            "-s",
-            WORLD_CONTROL_SERVICE,
-            "--reqtype",
-            "ignition.msgs.WorldControl",
-            "--reptype",
-            "ignition.msgs.Boolean",
-            "--timeout",
-            str(request_timeout_ms),
-            "--req",
-            f"multi_step: {int(count)}",
-        ]
-        last_output = ""
-        for attempt in range(1, attempts + 1):
-            try:
-                result = self._run(
-                    command,
-                    check=False,
-                    timeout=request_timeout_ms / 1000.0 + 5.0,
-                    log=False,
-                )
-                last_output = result.stdout.strip()
-                if result.returncode == 0 and "data: true" in result.stdout.lower():
-                    return
-            except subprocess.TimeoutExpired:
-                last_output = "ign service 进程等待超时"
-
-            if attempt < attempts:
-                self.get_logger().warning(
-                    f"Gazebo 单步请求失败，第 {attempt}/{attempts} 次；正在重试"
-                )
-
-        raise GraspActionError(
-            f"Gazebo 单步服务连续 {attempts} 次未成功：{last_output}"
-        )
 
     def _set_world_paused(self, paused):
         command = [
@@ -565,7 +556,10 @@ class GraspCubeAction(Node):
             "/joint_states 时间戳可能已经停止"
         )
 
-    def _activate_with_steps(self, controller):
+    def _activate_continuous(
+        self, controller, initial_command=None, publisher=None
+    ):
+        """Activate a controller while Gazebo's normal update loop is running."""
         process = subprocess.Popen(
             ["ros2", "control", "set_controller_state", controller, "active"],
             text=True,
@@ -575,10 +569,16 @@ class GraspCubeAction(Node):
         deadline = time.monotonic() + self.controller_timeout
         output = ""
         while process.poll() is None and time.monotonic() < deadline:
-            self._step(10)
+            if publisher is not None and initial_command is not None:
+                self._publish_to(publisher, initial_command, repeat=1)
             rclpy.spin_once(self, timeout_sec=0.05)
         if process.poll() is None:
             process.terminate()
+            try:
+                process.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2.0)
             raise GraspActionError(f"激活 {controller} 超时")
         output = process.communicate(timeout=2.0)[0] or ""
         if output.strip():
@@ -589,28 +589,66 @@ class GraspCubeAction(Node):
     def _ensure_broadcaster(self):
         states = self._controller_states()
         if BROADCASTER not in states:
-            self._run(
-                [
-                    "ros2",
-                    "run",
-                    "controller_manager",
-                    "spawner",
-                    BROADCASTER,
-                    "--controller-manager",
-                    "/controller_manager",
-                    "--inactive",
-                ],
-                timeout=30.0,
-            )
+            self._spawn_broadcaster_continuous()
             states = self._controller_states()
         if states.get(BROADCASTER) != "active":
-            self._activate_with_steps(BROADCASTER)
+            self._activate_continuous(BROADCASTER)
+
+    def _spawn_broadcaster_continuous(self):
+        """Load and activate the broadcaster in the continuous world."""
+        command = [
+            "ros2",
+            "run",
+            "controller_manager",
+            "spawner",
+            BROADCASTER,
+            "--controller-manager",
+            "/controller_manager",
+        ]
+        last_output = ""
+        for attempt in range(1, 4):
+            self.get_logger().info("执行并动态加载 broadcaster: " + " ".join(command))
+            process = subprocess.Popen(
+                command,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            deadline = time.monotonic() + self.controller_timeout
+            while process.poll() is None and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.05)
+
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2.0)
+                last_output = "spawner timed out"
+            else:
+                last_output = process.communicate(timeout=2.0)[0] or ""
+                if last_output.strip():
+                    self.get_logger().info(last_output.strip())
+                if process.returncode == 0:
+                    return
+
+            states = self._controller_states()
+            if BROADCASTER in states:
+                return
+            if attempt < 3:
+                self.get_logger().warning(
+                    f"加载 {BROADCASTER} 失败，正在重试（{attempt}/3）"
+                )
+
+        raise GraspActionError(
+            f"连续 3 次无法加载 {BROADCASTER}：{last_output.strip()}"
+        )
 
     def _wait_for_joint_state(self):
         required = set(POSITION_JOINTS)
         deadline = time.monotonic() + self.controller_timeout
         while rclpy.ok() and time.monotonic() < deadline:
-            self._step(10)
             rclpy.spin_once(self, timeout_sec=0.2)
             if self.latest_joint_state is None:
                 continue
@@ -641,7 +679,8 @@ class GraspCubeAction(Node):
     def _register_runtime_controller_type(self, controller):
         """兼容 Humble：在 load_controller 前显式注册插件类型。"""
         available = self._run(
-            ["ros2", "control", "list_controller_types"], timeout=10.0
+            ["ros2", "control", "list_controller_types"],
+            timeout=max(10.0, self.controller_timeout),
         )
         clean_output = re.sub(
             r"\x1b\[[0-?]*[ -/]*[@-~]", "", available.stdout
@@ -652,21 +691,51 @@ class GraspCubeAction(Node):
                 + "；请把 ros2 control list_controller_types 的输出发给我"
             )
 
-        result = self._run(
-            [
-                "ros2",
-                "param",
-                "set",
-                "/controller_manager",
-                f"{controller}.type",
-                FORWARD_CONTROLLER_TYPE,
-            ],
-            timeout=10.0,
-        )
-        if "successful" not in result.stdout.lower():
-            raise GraspActionError(
-                f"controller_manager 未接受 {controller} 的 type 参数"
+        # 直接请求参数服务，避免每次启动 ros2 param CLI 及其节点发现。
+        # 使用墙钟等待，即使仿真时钟停止也能按时退出。
+        service = "/controller_manager/set_parameters"
+        client = self.create_client(SetParameters, service)
+        timeout = max(10.0, self.controller_timeout)
+        try:
+            if not client.wait_for_service(timeout_sec=timeout):
+                raise GraspActionError(
+                    f"{service} 在 {timeout:.1f} 秒内不可用；"
+                    "请检查 controller_manager 是否运行，以及 ROS_DOMAIN_ID、"
+                    "RMW_IMPLEMENTATION 是否与仿真进程一致"
+                )
+            request = SetParameters.Request()
+            request.parameters = [
+                Parameter(
+                    f"{controller}.type", value=FORWARD_CONTROLLER_TYPE
+                ).to_parameter_msg()
+            ]
+            future = client.call_async(request)
+            deadline = time.monotonic() + timeout
+            while rclpy.ok() and not future.done() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.05)
+            if not rclpy.ok():
+                future.cancel()
+                raise KeyboardInterrupt
+            if not future.done():
+                future.cancel()
+                raise GraspActionError(
+                    f"{service} 已发现，但设置 {controller}.type "
+                    f"在 {timeout:.1f} 秒内未返回；请检查 controller_manager "
+                    "和 Gazebo 日志，确认进程未卡住"
+                )
+            response = future.result()
+            if response is None or len(response.results) != 1:
+                raise GraspActionError(f"{service} 返回了无效的参数设置结果")
+            result = response.results[0]
+            if not result.successful:
+                raise GraspActionError(
+                    f"controller_manager 拒绝 {controller}.type：{result.reason}"
+                )
+            self.get_logger().info(
+                f"已注册 {controller}.type = {FORWARD_CONTROLLER_TYPE}"
             )
+        finally:
+            self.destroy_client(client)
 
     def _remove_orphaned_controller(self, controller):
         """清除上次失败后可能残留的已加载/未配置控制器。"""
@@ -686,10 +755,10 @@ class GraspCubeAction(Node):
             f"没有可清除的 {controller} 残留实例，继续创建新控制器"
         )
 
-    def _spawn_active_with_steps(
+    def _spawn_active_continuous(
         self, controller, parameter_path, initial_command, publisher
     ):
-        """让 spawner 在保持初始命令的同时一次完成加载和激活。"""
+        """Load / activate while continuously publishing the hold command."""
         command = [
             "ros2",
             "run",
@@ -701,7 +770,7 @@ class GraspCubeAction(Node):
             "--param-file",
             parameter_path,
         ]
-        self.get_logger().info("执行并单步激活: " + " ".join(command))
+        self.get_logger().info("执行并动态激活: " + " ".join(command))
         process = subprocess.Popen(
             command,
             text=True,
@@ -710,10 +779,7 @@ class GraspCubeAction(Node):
         )
         deadline = time.monotonic() + self.controller_timeout
         while process.poll() is None and time.monotonic() < deadline:
-            # 控制器话题一出现就会收到真实初始值；激活等待期间持续推进
-            # 少量仿真步，使 controller_manager 的切换周期能够完成。
-            self._publish_to(publisher, initial_command, repeat=3)
-            self._step(10)
+            self._publish_to(publisher, initial_command, repeat=1)
         if process.poll() is None:
             process.terminate()
             try:
@@ -746,7 +812,7 @@ class GraspCubeAction(Node):
                 )
                 parameter_path = stream.name
             try:
-                self._spawn_active_with_steps(
+                self._spawn_active_continuous(
                     controller,
                     parameter_path,
                     initial_command,
@@ -760,12 +826,11 @@ class GraspCubeAction(Node):
             raise GraspActionError(
                 f"{controller} 的 spawner 已结束，但控制器未保留在 controller_manager 中"
             )
-        # 对于运行前已经存在但处于 inactive 的控制器，仍采用单独激活流程。
+        # 对于已经存在但处于 inactive 的控制器，持续发送初始命令再激活。
         self._publish_to(publisher, initial_command, repeat=10)
         if states.get(controller) != "active":
-            self._activate_with_steps(controller)
+            self._activate_continuous(controller, initial_command, publisher)
         self._publish_to(publisher, initial_command, repeat=10)
-        self._step(20)
 
     def _ensure_hold_controller(self, initial_positions):
         self._ensure_runtime_controller(

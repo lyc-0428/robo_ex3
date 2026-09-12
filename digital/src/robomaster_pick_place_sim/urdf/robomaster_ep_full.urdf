@@ -1305,7 +1305,7 @@
   </ros2_control>
   <gazebo>
     <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
-      <parameters>/home/nvidia/robotics/experiment2/gazebo_set/config/controllers.yaml</parameters>
+      <parameters>__CONTROLLERS_FILE__</parameters>
     </plugin>
   </gazebo>
   <gazebo reference="front_left_wheel_link">
