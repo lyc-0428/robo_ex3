@@ -220,7 +220,13 @@ def _run():
             try:
                 img = ep.camera.read_cv2_image(timeout=2, strategy="newest")
             except Exception as e:
-                print(f"read_cv2_image 异常: {type(e).__name__}: {e}")
+                # 队列 Empty 属正常 (流中断/切换网络时), 5 秒报一次, 别刷屏
+                now = time.time()
+                if now - last_heartbeat >= 5:
+                    print(f"[t={now-t0:.0f}s] read_cv2_image 异常: "
+                          f"{type(e).__name__}: {e}")
+                    last_heartbeat = now
+                cv2.waitKey(1)
                 continue
             if img is None:
                 # 5 秒没帧才打一次心跳, 避免刷屏
