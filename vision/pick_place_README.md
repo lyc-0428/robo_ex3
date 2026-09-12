@@ -9,7 +9,7 @@
 | 步骤 | 状态 | 说明 |
 |---|---|---|
 | 标定 (步骤 1) | ✅ 通过 | `calib.json` 已生成在板子 `~/Team21/vision/`, 9/9 点, **RMS 1.12mm, max 10.5mm** |
-| dry-run 定位精度 (步骤 2) | ✅ 通过 | 5 个位置与卷尺对账, **最大误差 8mm** (<15mm 判据) |
+| dry-run 定位精度 (步骤 2) | ✅ 通过 | 两轮 dry-run: 首轮 5 点与卷尺对账**最大误差 8mm**; 二轮 7 点定位 (含 bottle 检测), 2 例有效带外均被正确拦截 (<15mm 判据) |
 | yaw 符号 (步骤 0 前半) | ✅ 确认 | 球在 l=+100 处打印 yaw 为正 |
 | 水瓶扫参 (步骤 3) | ⬜ **下一步** | `gripper_status_sweep.py` 两遍, 判读后填 `GRASP_PARAMS["bottle"]` |
 | 单轮真抓联调 (步骤 4) | ⬜ | bottle/tennis_ball 各 1 次; **首次真抓顺带确认底盘转向方向** (见下) |
@@ -118,6 +118,12 @@ cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
 
 `--sequence bottle,tennis_ball,... --runs 5`, 判据 ≥4/5 成功
 (失败轮: 报错灯 + safe_home + 中止)。通过后更新本 README 的进度表。
+
+## 待观察项 (步骤 4 真抓时评估)
+
+- **有效带下限可能偏保守**: dry-run 实测相机能看到 d≈178mm 的球 (v≈288 处),
+  但 R_VALID_MM 下限 191 会拦下。若实验想支持更近的摆放, 先真抓验证
+  r=186 时爪落点没问题, 再把下限放宽到 ~181 (vision_pick_place.py 一处)。
 
 ## 踩过的坑 (勿重蹈)
 
