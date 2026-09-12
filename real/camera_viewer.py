@@ -6,7 +6,7 @@
   - libmedia_codec.py 桩已换成真解码器 (见 real/README.md)
 
 用法 (板子上, 已连机器人热点, 已接显示器):
-    cd ~/colcon_ws/src/robomaster_pick_place_sim
+    cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
     python3 real/camera_viewer.py           # 默认 720p
     python3 real/camera_viewer.py 360p      # 卡顿就用低分辨率
 """
