@@ -358,7 +358,14 @@ GRASP_PARAMS = {
         "release_down": -80, "final_lift": 70,
     },
     "bottle": {
-        "power": 30, "closed_fast": 2.0, "stable_time": 2.5, "timeout": 8.0,
+        # 扫参实值 2026-09-13 (判读规则 2: 所有功率夹瓶也闭合, 取两遍
+        # first_closed 时间差最大者): power=20 时空夹 2.5s vs 夹瓶 1.5s
+        # (Δ=1.0s 最大), closed_fast 取中值 2.0s。日志:
+        # ~/Desktop/gripper_sweep_bottle_empty_20260913_063403.txt
+        # ~/Desktop/gripper_sweep_bottle_20260913_063527.txt
+        # 注意 power=20 夹持力低于网球档 (30), 搬运是否够力留待步骤 4 单轮
+        # 真抓确认; 若转运中脱手, 优先试 power=30 (Δ=0.5s, closed_fast 1.75)。
+        "power": 20, "closed_fast": 2.0, "stable_time": 2.5, "timeout": 8.0,
         "grasp_arm_y": 120,
         "extra_forward": 30, "coarse_forward": 60, "final_forward": 6,
         "coarse_down": -240, "final_down": -24,
