@@ -84,3 +84,4 @@ digital/actions/*.ball_backup
 digital/tests/*.before_*
 digital/tests/*.broken_*
 digital/models/**/*.bak*
+digital/models/water_bottle_03/*.before_*

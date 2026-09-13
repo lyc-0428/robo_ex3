@@ -191,7 +191,7 @@ def make_slot_layout(seed, radius, angles_degrees):
                 "angle_degrees": angle_degrees,
                 "x": radius * math.cos(angle),
                 "y": radius * math.sin(angle),
-                # water_bottle_02 places its link centre at z=0.105 inside
+                # water_bottle_03 places its link centre at z=0.105 inside
                 # the model, so its model origin belongs directly on z=0.
                 "z": 0.0 if task_class == BOTTLE else 0.0335,
             }
@@ -208,14 +208,14 @@ def _resource_uri(model_root, relative_path):
 
 def bottle_sdf(name, model_root):
     """Load the team-authored bottle SDF without changing its geometry."""
-    model_path = Path(model_root) / "water_bottle_02" / "model.sdf"
+    model_path = Path(model_root) / "water_bottle_03" / "model.sdf"
     if not model_path.is_file():
         raise FileNotFoundError(f"custom bottle model not found: {model_path}")
     source = model_path.read_text(encoding="utf-8")
-    original_tag = '<model name="water_bottle_02">'
+    original_tag = '<model name="water_bottle_03">'
     if source.count(original_tag) != 1:
         raise ValueError(
-            "water_bottle_02/model.sdf must contain exactly one expected model tag"
+            "water_bottle_03/model.sdf must contain exactly one expected model tag"
         )
     # Neutral naming is the only modification. All link poses, mesh URIs,
     # materials, mass, collision dimensions and inertias remain verbatim.
