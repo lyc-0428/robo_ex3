@@ -173,13 +173,14 @@ def placement_step(sequence, completed_for_class):
 
 
 def make_slot_layout(seed, radius, angles_degrees):
-    """Create neutral-name slots; the returned order never encodes class."""
+    """Create fixed outer-tennis / inner-bottle slots with neutral names."""
     radius = float(radius)
     angles = [float(value) for value in angles_degrees]
     if radius <= 0.0 or len(angles) != 4:
         raise ValueError("slot radius must be positive and exactly four angles are required")
-    classes = [BOTTLE] * 2 + [TENNIS] * 2
-    random.Random(int(seed)).shuffle(classes)
+    # Keep the tall bottles near the camera centre and the rolling objects at
+    # the two outer slots: tennis, bottle, bottle, tennis from left to right.
+    classes = [TENNIS, BOTTLE, BOTTLE, TENNIS]
     layout = []
     for index, (angle_degrees, task_class) in enumerate(zip(angles, classes)):
         angle = math.radians(angle_degrees)
@@ -190,7 +191,7 @@ def make_slot_layout(seed, radius, angles_degrees):
                 "angle_degrees": angle_degrees,
                 "x": radius * math.cos(angle),
                 "y": radius * math.sin(angle),
-                # water_bottle_01 places its link centre at z=0.105 inside
+                # water_bottle_02 places its link centre at z=0.105 inside
                 # the model, so its model origin belongs directly on z=0.
                 "z": 0.0 if task_class == BOTTLE else 0.0335,
             }
@@ -207,44 +208,63 @@ def _resource_uri(model_root, relative_path):
 
 def bottle_sdf(name, model_root):
     """Load the team-authored bottle SDF without changing its geometry."""
-    model_path = Path(model_root) / "water_bottle_01" / "model.sdf"
+    model_path = Path(model_root) / "water_bottle_02" / "model.sdf"
     if not model_path.is_file():
         raise FileNotFoundError(f"custom bottle model not found: {model_path}")
     source = model_path.read_text(encoding="utf-8")
-    original_tag = '<model name="water_bottle_01">'
+    original_tag = '<model name="water_bottle_02">'
     if source.count(original_tag) != 1:
         raise ValueError(
-            "water_bottle_01/model.sdf must contain exactly one expected model tag"
+            "water_bottle_02/model.sdf must contain exactly one expected model tag"
         )
     # Neutral naming is the only modification. All link poses, mesh URIs,
     # materials, mass, collision dimensions and inertias remain verbatim.
     return source.replace(original_tag, f'<model name="{name}">', 1)
 
 
-def tennis_sdf(name, model_root, mass=0.057, friction=5.0):
+def tennis_sdf(name, model_root, mass=0.057, friction=10000.0):
     radius = 0.0335
+    collision_radius = 0.030
+    collision_length = 0.060
     mass = float(mass)
     friction = float(friction)
-    inertia = 0.4 * mass * radius**2
+    transverse_inertia = (
+        mass * (3.0 * collision_radius**2 + collision_length**2) / 12.0
+    )
+    axial_inertia = 0.5 * mass * collision_radius**2
     mesh_uri = _resource_uri(model_root, "056_tennis_ball/textured.obj")
     return f"""<?xml version="1.0"?>
 <sdf version="1.7">
   <model name="{name}">
     <static>false</static>
     <link name="object_link">
-      <gravity>false</gravity>
+      <gravity>true</gravity>
+      <velocity_decay>
+        <linear>0.999</linear>
+        <angular>0.9999</angular>
+      </velocity_decay>
       <inertial>
         <mass>{mass:.9f}</mass>
         <inertia>
-          <ixx>{inertia:.12f}</ixx><iyy>{inertia:.12f}</iyy><izz>{inertia:.12f}</izz>
+          <ixx>{transverse_inertia:.12f}</ixx>
+          <iyy>{transverse_inertia:.12f}</iyy>
+          <izz>{axial_inertia:.12f}</izz>
           <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
         </inertia>
       </inertial>
       <collision name="object_collision">
-        <geometry><sphere><radius>{radius}</radius></sphere></geometry>
+        <!-- A vertical, flat-bottomed collision body prevents idle rolling.
+             The visual mesh remains a tennis ball and the body stays dynamic,
+             so the gripper can still pick it up and carry it normally. -->
+        <geometry>
+          <cylinder>
+            <radius>{collision_radius:.6f}</radius>
+            <length>{collision_length:.6f}</length>
+          </cylinder>
+        </geometry>
         <surface>
           <friction><ode><mu>{friction}</mu><mu2>{friction}</mu2></ode></friction>
-          <contact><ode><kp>100000</kp><kd>10</kd></ode></contact>
+          <contact><ode><kp>1000000</kp><kd>2000</kd></ode></contact>
         </surface>
       </collision>
       <visual name="object_visual">

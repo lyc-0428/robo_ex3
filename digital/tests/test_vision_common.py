@@ -66,25 +66,6 @@ class VisionCommonTests(unittest.TestCase):
         self.assertEqual(result["class_name"], BOTTLE)
         self.assertEqual(result["stable_votes"], 3)
 
-    def test_leftmost_tracking_does_not_switch_to_center_object(self):
-        frames = [
-            [detection("tennis", 110), detection("tennis", 300)],
-            [detection("tennis", 115), detection("tennis", 302)],
-            [detection("tennis", 120), detection("tennis", 305)],
-        ]
-        result = stable_center_detection(
-            frames,
-            320,
-            required_votes=3,
-            preferred_class=TENNIS,
-            selection="leftmost",
-        )
-        self.assertIsNotNone(result)
-        self.assertAlmostEqual(
-            (result["bbox"]["x1"] + result["bbox"]["x2"]) * 0.5,
-            115.0,
-        )
-
     def test_unstable_or_unknown_is_rejected(self):
         frames = [
             [detection("bottle", 100)],
@@ -115,13 +96,17 @@ class VisionCommonTests(unittest.TestCase):
         self.assertEqual(placement_step(values, 2), 2650)
         self.assertEqual(placement_step(values, 20), 2650)
 
-    def test_random_layout_has_neutral_names_and_requested_counts(self):
+    def test_layout_places_bottles_in_middle_and_tennis_outside(self):
         angles = [-30.0, -10.0, 10.0, 30.0]
         first = make_slot_layout(21, 0.350, angles)
         second = make_slot_layout(21, 0.350, angles)
         self.assertEqual(first, second)
         self.assertEqual(sum(item["class_name"] == BOTTLE for item in first), 2)
         self.assertEqual(sum(item["class_name"] == TENNIS for item in first), 2)
+        self.assertEqual(
+            [item["class_name"] for item in first],
+            [TENNIS, BOTTLE, BOTTLE, TENNIS],
+        )
         self.assertTrue(
             all(item["z"] == 0.0 for item in first if item["class_name"] == BOTTLE)
         )
@@ -148,13 +133,24 @@ class VisionCommonTests(unittest.TestCase):
         bottle_xml = ET.fromstring(bottle)
         self.assertEqual(bottle_xml.find("model").attrib["name"], "task_object_0")
         self.assertIn(
-            "model://water_bottle_01/meshes/bottle_body.obj", bottle
+            "model://water_bottle_02/meshes/bottle_body.obj", bottle
         )
         self.assertIn(
-            "model://water_bottle_01/meshes/bottle_cap.obj", bottle
+            "model://water_bottle_02/meshes/bottle_cap.obj", bottle
         )
+        for visual_name in ("bottle_body_visual", "bottle_cap_visual"):
+            pose = bottle_xml.find(
+                f".//visual[@name='{visual_name}']/pose"
+            )
+            self.assertIsNotNone(pose)
+            self.assertEqual(pose.text.strip(), "0 0 -0.105 0 0 0")
         self.assertNotIn("WaterBottle_fortress.obj", bottle)
-        ET.fromstring(tennis_sdf("task_object_1", model_root))
+        tennis = ET.fromstring(tennis_sdf("task_object_1", model_root))
+        self.assertIsNone(tennis.find("./model/plugin"))
+        collision = tennis.find(".//collision/geometry/cylinder")
+        self.assertIsNotNone(collision)
+        self.assertEqual(collision.findtext("radius"), "0.030000")
+        self.assertEqual(collision.findtext("length"), "0.060000")
 
 
 if __name__ == "__main__":

@@ -167,7 +167,7 @@ class GraspCubeAction(Node):
         self.declare_parameter("cube_width", 0.05)
         self.declare_parameter("cube_height", 0.12)
         self.declare_parameter("cube_mass", 0.20)
-        self.declare_parameter("cube_friction", 5.0)
+        self.declare_parameter("cube_friction", 10.0)
         # 柱体前后位置参数；运行时可用 --ros-args -p cube_x:=VALUE 覆盖。
         self.declare_parameter("cube_x", 0.35)
         self.declare_parameter("cube_y", 0.0)
@@ -198,6 +198,7 @@ class GraspCubeAction(Node):
         self.declare_parameter("wheel_speed", 3.0)
         # 实测 1050 个 0.001 s 仿真步约为 180 度；连续模式换算为 1.05 s。
         self.declare_parameter("turn_steps", 1050)
+        self.declare_parameter("final_insert_steps", 133)
         self.declare_parameter("physics_step_seconds", 0.001)
         self.declare_parameter("post_turn_settle_seconds", 0.30)
         self.declare_parameter("world_service_timeout_ms", 15000)
@@ -277,6 +278,9 @@ class GraspCubeAction(Node):
             * self.speed_scale
         )
         self.turn_steps = int(self.get_parameter("turn_steps").value)
+        self.final_insert_steps = int(
+            self.get_parameter("final_insert_steps").value
+        )
         self.physics_step_seconds = float(
             self.get_parameter("physics_step_seconds").value
         )
@@ -1073,6 +1077,70 @@ class GraspCubeAction(Node):
         self._publish_status("SAFE HOME COMPLETE: gripper open, arm initialized")
         return home_open
 
+    def _move_chassis_final_insert(self, held_positions, forward=True):
+        """Move chassis slightly so the lowered open gripper surrounds the object more deeply."""
+        if self.final_insert_steps <= 0:
+            return
+
+        direction = 1.0 if forward else -1.0
+
+        nominal_duration = (
+            self.final_insert_steps
+            * self.physics_step_seconds
+            / self.speed_scale
+        )
+
+        # Keep a usable command duration while preserving calibrated travel.
+        duration = max(nominal_duration, 0.10)
+        command_speed = (
+            self.wheel_speed
+            * nominal_duration
+            / duration
+        )
+
+        wheel_command = [direction * command_speed] * 4
+
+        label = (
+            "FINAL GRIP INSERT FORWARD"
+            if forward
+            else "FINAL GRIP INSERT RESTORE"
+        )
+
+        self._publish_status(
+            f"{label} | steps={self.final_insert_steps} | "
+            f"speed={command_speed:.3f} | duration={duration:.3f}s"
+        )
+
+        try:
+            def keep_moving(ratio):
+                if ratio >= 1.0:
+                    return
+                self._publish(held_positions, repeat=1)
+                self._publish_to(
+                    self.wheel_publisher,
+                    wheel_command,
+                    repeat=1,
+                )
+
+            self._wait_sim_duration(
+                duration,
+                callback=keep_moving,
+            )
+        finally:
+            self._publish_to(
+                self.wheel_publisher,
+                [0.0] * 4,
+                repeat=10,
+            )
+            self._publish(
+                held_positions,
+                repeat=10,
+            )
+
+        self._wait_sim_duration(
+            self.post_turn_settle_duration
+        )
+
     def _rotate_chassis(self, held_positions):
         # Mecanum / skid-steer 原地旋转：左轮反转，右轮正转。
         wheel_command = [
@@ -1162,6 +1230,9 @@ class GraspCubeAction(Node):
         self._report_step(attempt, 8, "AT GRASP POSITION")
         self._settle(grasp_open)
 
+        self._report_step(attempt, "8B", "FINAL FORWARD INSERT")
+        self._move_chassis_final_insert(grasp_open, forward=True)
+
         self._report_step(attempt, 9, "CLOSE GRIPPER")
         grasp_closed = self._gripper_pose(
             grasp_open, initial, index, opened=False
@@ -1174,6 +1245,9 @@ class GraspCubeAction(Node):
             grasp_closed, index
         ):
             self._publish_status("抓取失败：夹爪完全闭合，停止搬运循环")
+            self._move_chassis_final_insert(
+                grasp_closed, forward=False
+            )
             return False, self._safe_home_pose(
                 initial, grasp_closed, index
             )
@@ -1195,6 +1269,9 @@ class GraspCubeAction(Node):
             test_lift_closed, index
         ):
             self._publish_status("抓取失败：试抬后夹爪完全闭合，执行安全回位")
+            self._move_chassis_final_insert(
+                test_lift_closed, forward=False
+            )
             return False, self._safe_home_pose(
                 initial, test_lift_closed, index
             )
@@ -1208,6 +1285,11 @@ class GraspCubeAction(Node):
 
         self._report_step(attempt, 14, "SETTLE BEFORE TURN")
         self._settle(lifted_closed)
+
+        self._report_step(attempt, "14B", "RESTORE FINAL INSERT")
+        self._move_chassis_final_insert(
+            lifted_closed, forward=False
+        )
 
         self._report_step(attempt, 15, "RIGHT TURN TO PLACE AREA")
         self._rotate_chassis(lifted_closed)

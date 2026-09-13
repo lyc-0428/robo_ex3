@@ -15,6 +15,7 @@ from rclpy.qos import qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import CameraInfo
 from std_msgs.msg import String
+from sorting_identity import SortingIdentity
 
 from grasp_cube import GraspActionError, GraspCubeAction, POSITION_JOINTS
 from vision_common import (
@@ -42,18 +43,25 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._use_tennis_grasp = False
         self.turn_steps = 2500
 
-        self.declare_parameter("detection_timeout_seconds", 10.0)
+        # The outer ±30-degree slots need about 11-12 seconds at the current
+        # filtered YOLO frame rate and smooth wheel acceleration.
+        self.declare_parameter("detection_timeout_seconds", 15.0)
         self.declare_parameter("stable_window_frames", 5)
-        self.declare_parameter("stable_required_frames", 3)
-        self.declare_parameter("stable_center_spread_px", 90.0)
-        self.declare_parameter("alignment_tolerance_px", 24.0)
+        self.declare_parameter("stable_required_frames", 4)
+        self.declare_parameter("stable_center_spread_px", 35.0)
+        self.declare_parameter("alignment_tolerance_px", 12.0)
         # Jetson live calibration: use half the original angular gain.  The
         # camera image moves opposite to the chassis yaw command, so visual
         # corrections invert the geometric image angle below.
-        self.declare_parameter("alignment_steps_per_radian", 167.1125)
-        self.declare_parameter("max_alignment_corrections", 3)
+        self.declare_parameter("alignment_steps_per_radian", 1000.0)
+        self.declare_parameter("max_alignment_corrections", 8)
+        self.declare_parameter("alignment_kp", 0.02)
+        self.declare_parameter("alignment_min_speed", 0.4)
+        self.declare_parameter("alignment_max_speed", 3.0)
+        self.declare_parameter("alignment_smoothing", 0.35)
+        self.declare_parameter("aligned_required_frames", 3)
         self.declare_parameter("max_grasp_retries", 2)
-        self.declare_parameter("minimum_wheel_command_seconds", 0.20)
+        self.declare_parameter("minimum_wheel_command_seconds", 0.10)
         self.declare_parameter("forward_approach_steps", 333)
         self.declare_parameter("bottle_place_steps", [2350, 2500, 2650])
         self.declare_parameter("tennis_place_steps", [2350, 2500, 2650])
@@ -81,6 +89,21 @@ class GraspBottleTennisAction(GraspCubeAction):
         )
         self.max_alignment_corrections = int(
             self.get_parameter("max_alignment_corrections").value
+        )
+        self.alignment_kp = float(
+            self.get_parameter("alignment_kp").value
+        )
+        self.alignment_min_speed = float(
+            self.get_parameter("alignment_min_speed").value
+        )
+        self.alignment_max_speed = float(
+            self.get_parameter("alignment_max_speed").value
+        )
+        self.alignment_smoothing = float(
+            self.get_parameter("alignment_smoothing").value
+        )
+        self.aligned_required_frames = int(
+            self.get_parameter("aligned_required_frames").value
         )
         self.max_grasp_retries = int(
             self.get_parameter("max_grasp_retries").value
@@ -143,6 +166,15 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._placement_relative_steps = 0
         self._forward_offset_active = False
         self._active_initial_positions = None
+        self._ignore_detections = False
+        self._cycle_wheel_positions = None
+        self._identity = None
+        self._locked_object_id = None
+        self._locked_object_origin = None
+        self._cycle_yaw = None
+        self._aligned_yaw = None
+        self.camera_focal_y = None
+        self.camera_principal_y = None
 
     @staticmethod
     def _write_ready_file(path_text):
@@ -171,8 +203,12 @@ class GraspBottleTennisAction(GraspCubeAction):
         self.camera_width = int(message.width)
         self.camera_focal_x = float(message.k[0])
         self.camera_principal_x = float(message.k[2])
+        self.camera_focal_y = float(message.k[4])
+        self.camera_principal_y = float(message.k[5])
 
     def _detection_callback(self, message):
+        if self._ignore_detections:
+            return
         try:
             payload = json.loads(message.data)
             frame_number = int(payload["frame"])
@@ -189,6 +225,13 @@ class GraspBottleTennisAction(GraspCubeAction):
                 item = dict(detection)
                 item["class_name"] = task_class
                 clean.append(item)
+            if self._identity is not None:
+                clean = self._identity.associate(
+                    clean, self.latest_joint_state,
+                    (self.camera_focal_x, self.camera_focal_y,
+                     self.camera_principal_x, self.camera_principal_y),
+                    locked=self._locked_object_id, counts=self.category_counts,
+                )
             self.detection_frames.append(clean)
             self.last_detection_frame_number = frame_number
         except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
@@ -241,6 +284,7 @@ class GraspBottleTennisAction(GraspCubeAction):
             if detection is not None:
                 self._publish_status(
                     "VISION LOCK | "
+                    f"id={detection.get('object_id', 'unassociated')} | "
                     f"class={detection['class_name']} | "
                     f"confidence={detection['confidence']:.3f} | "
                     f"stable={detection['stable_votes']}/{self.stable_window_frames} | "
@@ -276,6 +320,19 @@ class GraspBottleTennisAction(GraspCubeAction):
         if not all(name in values for name in names):
             return None
         return tuple(float(values[name]) for name in names)
+
+    def _turn_steps_from_wheel_positions(self, before, after):
+        """Convert measured counter-rotating wheel travel to signed turn steps."""
+        if before is None or after is None:
+            return None
+        deltas = tuple(end - start for start, end in zip(before, after))
+        signed_wheel_delta = (-deltas[0] + deltas[1] - deltas[2] + deltas[3]) * 0.25
+        radians_per_step = (
+            self.wheel_speed * self.physics_step_seconds / self.speed_scale
+        )
+        if radians_per_step <= 0.0:
+            return None
+        return int(round(signed_wheel_delta / radians_per_step))
 
     def _rotate_by_steps(self, held_positions, signed_steps, label):
         signed_steps = int(signed_steps)
@@ -318,40 +375,262 @@ class GraspBottleTennisAction(GraspCubeAction):
             )
 
     def _align_to_visual_target(self, held_positions):
+        """Continuously rotate the chassis while visually centering the target."""
         detection = self._wait_stable_detection()
         target_class = detection["class_name"]
+        self._locked_object_id = detection['object_id']
+        if self._locked_object_origin is None:
+            self._locked_object_origin = self._identity.position(self._locked_object_id)
+        alignment_positions_before = self._wheel_positions()
+
+        # 根据目标最初相对摄像头的角度决定最终向前插入距离。
+        # 中间槽位约 ±10° -> 1 cm；外侧槽位约 ±30° -> 2 cm。
+        initial_target_angle = abs(
+            horizontal_angle_radians(
+                detection,
+                self.camera_focal_x,
+                self.camera_principal_x,
+            )
+        )
+
+        robot_position = self._identity.position('robomaster_ep_core')
+        target_position = self._identity.position(self._locked_object_id)
+        yaw = self._identity.yaw()
+        if robot_position is not None and target_position is not None and yaw is not None:
+            bearing = math.atan2(target_position[1]-robot_position[1],
+                                 target_position[0]-robot_position[0]) - yaw
+            initial_target_angle = abs(math.atan2(math.sin(bearing), math.cos(bearing)))
+
+        if math.degrees(initial_target_angle) < 20.0:
+            self.final_insert_steps = 67      # 约 1 cm
+            insert_distance = "1 cm (middle slot)"
+        else:
+            self.final_insert_steps = 133     # 约 2 cm
+            insert_distance = "2 cm (outer slot)"
+
+        self._publish_status(
+            "FINAL INSERT SELECT | "
+            f"class={target_class} | "
+            f"initial_angle={math.degrees(initial_target_angle):.1f} deg | "
+            f"distance={insert_distance} | "
+            f"steps={self.final_insert_steps}"
+        )
+
+        def center_x(item):
+            box = item["bbox"]
+            return (float(box["x1"]) + float(box["x2"])) * 0.5
+
+        last_center_x = center_x(detection)
+        filtered_center_x = last_center_x
+        current_turn_speed = 0.0
+        aligned_frames = 0
+        last_frame_number = self.last_detection_frame_number
+        last_sim_time = self.latest_sim_time
+        log_counter = 0
+
         self._alignment_steps = 0
-        for correction in range(self.max_alignment_corrections + 1):
-            center_x = (
-                float(detection["bbox"]["x1"])
-                + float(detection["bbox"]["x2"])
-            ) * 0.5
-            error_px = center_x - self.camera_principal_x
-            if abs(error_px) <= self.alignment_tolerance_px:
-                self._publish_status(
-                    "TARGET ALIGNED | "
-                    f"class={target_class} | error_px={error_px:.1f} | "
-                    f"total_steps={self._alignment_steps}"
+
+        self._publish_status(
+            f"CONTINUOUS VISUAL ALIGN START | class={target_class}"
+        )
+
+        deadline = time.monotonic() + self.detection_timeout
+
+        try:
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.01)
+
+                # Hold the arm continuously while chassis is rotating.
+                self._publish(held_positions, repeat=1)
+
+                # Wait for a fresh YOLO frame.
+                if self.last_detection_frame_number == last_frame_number:
+                    wheel_command = [
+                        -current_turn_speed,
+                        current_turn_speed,
+                        -current_turn_speed,
+                        current_turn_speed,
+                    ]
+                    self._publish_to(
+                        self.wheel_publisher,
+                        wheel_command,
+                        repeat=1,
+                    )
+                    continue
+
+                last_frame_number = self.last_detection_frame_number
+
+                if not self.detection_frames:
+                    continue
+
+                latest = self.detection_frames[-1]
+
+                candidates = [
+                    item
+                    for item in latest
+                    if canonical_class(item.get("class_name", ""))
+                    == target_class
+                ]
+
+                # If detection is temporarily lost, smoothly slow down.
+                if not candidates:
+                    aligned_frames = 0
+                    current_turn_speed = 0.0
+
+                    if abs(current_turn_speed) < 0.10:
+                        current_turn_speed = 0.0
+
+                    wheel_command = [
+                        -current_turn_speed,
+                        current_turn_speed,
+                        -current_turn_speed,
+                        current_turn_speed,
+                    ]
+
+                    self._publish_to(
+                        self.wheel_publisher,
+                        wheel_command,
+                        repeat=1,
+                    )
+                    continue
+
+                # Track the same object rather than jumping to another
+                # object of the same class.
+                detection = min(
+                    candidates,
+                    key=lambda item: abs(center_x(item) - last_center_x),
                 )
-                return target_class
-            if correction >= self.max_alignment_corrections:
-                break
-            angle = horizontal_angle_radians(
-                detection, self.camera_focal_x, self.camera_principal_x
+
+                measured_center_x = center_x(detection)
+                last_center_x = measured_center_x
+
+                # Low-pass filtering of YOLO bbox center.
+                filtered_center_x = (
+                    0.70 * filtered_center_x
+                    + 0.30 * measured_center_x
+                )
+
+                error_px = filtered_center_x - self.camera_principal_x
+
+                if abs(error_px) <= self.alignment_tolerance_px:
+                    aligned_frames += 1
+                    desired_turn_speed = 0.0
+                else:
+                    aligned_frames = 0
+
+                    speed = self.alignment_kp * abs(error_px)
+                    speed = max(
+                        self.alignment_min_speed,
+                        min(speed, self.alignment_max_speed),
+                    )
+
+                    # Keep the same steering direction as the old:
+                    # steps = -angle_to_steps(...)
+                    desired_turn_speed = (
+                        -speed if error_px > 0.0 else speed
+                    )
+
+                # Smooth acceleration / deceleration.
+                alpha = self.alignment_smoothing
+                current_turn_speed += alpha * (
+                    desired_turn_speed - current_turn_speed
+                )
+
+                if abs(current_turn_speed) < 0.05:
+                    current_turn_speed = 0.0
+
+                wheel_command = [
+                    -current_turn_speed,
+                    current_turn_speed,
+                    -current_turn_speed,
+                    current_turn_speed,
+                ]
+
+                self._publish_to(
+                    self.wheel_publisher,
+                    wheel_command,
+                    repeat=1,
+                )
+
+                # Convert continuous rotation back into the old calibrated
+                # signed-step representation so placement/restoration works.
+                current_sim_time = self.latest_sim_time
+
+                if (
+                    last_sim_time is not None
+                    and current_sim_time is not None
+                    and current_sim_time > last_sim_time
+                    and abs(current_turn_speed) > 0.01
+                ):
+                    dt = current_sim_time - last_sim_time
+
+                    step_rate = (
+                        current_turn_speed
+                        / self.wheel_speed
+                        * self.speed_scale
+                        / self.physics_step_seconds
+                    )
+
+                    self._alignment_steps += int(
+                        round(step_rate * dt)
+                    )
+
+                last_sim_time = current_sim_time
+
+                log_counter += 1
+                if log_counter % 5 == 0:
+                    self.get_logger().info(
+                        "CONTINUOUS ALIGN | "
+                        f"class={target_class} | "
+                        f"error_px={error_px:.1f} | "
+                        f"wheel={current_turn_speed:.2f} | "
+                        f"stable={aligned_frames}/"
+                        f"{self.aligned_required_frames}"
+                    )
+
+                if (
+                    aligned_frames >= self.aligned_required_frames
+                    and abs(current_turn_speed) <= 0.30
+                ):
+                    self._publish_to(
+                        self.wheel_publisher,
+                        [0.0] * 4,
+                        repeat=10,
+                    )
+                    self._publish(held_positions, repeat=10)
+
+                    self._publish_status(
+                        "TARGET ALIGNED | "
+                        f"class={target_class} | "
+                        f"error_px={error_px:.1f} | "
+                        f"total_steps={self._alignment_steps}"
+                    )
+
+                    return target_class
+
+        finally:
+            self._publish_to(
+                self.wheel_publisher,
+                [0.0] * 4,
+                repeat=10,
             )
-            steps = -angle_to_steps(angle, self.alignment_steps_per_radian)
-            if steps == 0:
-                steps = -1 if error_px > 0.0 else 1
-            self._rotate_by_steps(
-                held_positions,
-                steps,
-                f"VISION ALIGN {correction + 1}/{self.max_alignment_corrections} | "
-                f"error_px={error_px:.1f} | angle_deg={math.degrees(angle):.2f}",
+            self._publish(held_positions, repeat=10)
+            self._wait_sim_duration(self.post_turn_settle_duration)
+            self._aligned_yaw = self._identity.yaw()
+            measured_steps = self._turn_steps_from_wheel_positions(
+                alignment_positions_before,
+                self._wheel_positions(),
             )
-            self._alignment_steps += steps
-            detection = self._wait_stable_detection(preferred_class=target_class)
+            if measured_steps is not None:
+                self._alignment_steps = measured_steps
+                self._publish_status(
+                    "VISUAL ALIGNMENT ODOMETRY | "
+                    f"measured_steps={self._alignment_steps}"
+                )
+
         raise GraspActionError(
-            f"unable to center {target_class} within {self.alignment_tolerance_px:.1f} px"
+            f"unable to continuously center {target_class} "
+            f"within {self.alignment_tolerance_px:.1f} px"
         )
 
     def _arm_pose(self, initial, fraction):
@@ -435,7 +714,8 @@ class GraspBottleTennisAction(GraspCubeAction):
             sequence, self.category_counts[self._current_class]
         )
         # Positive is robot-right and negative is robot-left.
-        desired_absolute = magnitude if self._current_class == BOTTLE else -magnitude
+        # Bottle -> robot right; Tennis -> robot left.
+        desired_absolute = -magnitude if self._current_class == BOTTLE else magnitude
         self._placement_relative_steps = desired_absolute - self._alignment_steps
         zone = (
             "RIGHT BOTTLE ZONE"
@@ -459,24 +739,73 @@ class GraspBottleTennisAction(GraspCubeAction):
             self._settle(observation)
         return observation
 
+    def _restore_world_heading(self, held_positions, target_yaw):
+        if target_yaw is None:
+            return
+        for correction in range(40):
+            yaw = self._identity.yaw()
+            if yaw is None:
+                raise GraspActionError('world heading feedback lost during restoration')
+            error = math.atan2(math.sin(target_yaw-yaw), math.cos(target_yaw-yaw))
+            if abs(error) <= math.radians(1.0):
+                self._publish_status(f'WORLD HEADING RESTORED | error_deg={math.degrees(error):.2f}')
+                return
+            steps = int(round(max(-250, min(250, error*1600))))
+            self._rotate_by_steps(held_positions, steps,
+                                  f'WORLD HEADING RESTORE | error_deg={math.degrees(error):.2f}')
+        raise GraspActionError('actual world heading did not converge; no new target selected')
+
     def _restore_cycle_offsets(self, held_positions):
-        if self._placement_relative_steps:
-            self._rotate_by_steps(
-                held_positions,
-                -self._placement_relative_steps,
-                "RESTORE HEADING AFTER PLACEMENT",
+        self._ignore_detections = True
+        self.detection_frames.clear()
+        self._publish_status("RESTORE CYCLE OFFSETS | vision detections ignored")
+        try:
+            if self._placement_relative_steps:
+                self._rotate_by_steps(
+                    held_positions,
+                    -self._placement_relative_steps,
+                    "RESTORE HEADING AFTER PLACEMENT",
+                )
+                self._placement_relative_steps = 0
+            if self._forward_offset_active:
+                # Undo translation along the same actual heading used on approach.
+                # Encoder reversal alone can leave the chassis facing the zone.
+                self._restore_world_heading(held_positions, self._aligned_yaw)
+                self._move_chassis_linear(held_positions, forward=False)
+                self._forward_offset_active = False
+            if self._alignment_steps:
+                self._rotate_by_steps(
+                    held_positions,
+                    -self._alignment_steps,
+                    "RESTORE CAMERA OBSERVATION HEADING",
+                )
+                self._alignment_steps = 0
+            for correction in range(2):
+                residual_steps = self._turn_steps_from_wheel_positions(
+                    self._cycle_wheel_positions,
+                    self._wheel_positions(),
+                )
+                if residual_steps is None or abs(residual_steps) <= 1:
+                    break
+                self._rotate_by_steps(
+                    held_positions,
+                    -residual_steps,
+                    f"RESTORE ENCODER HEADING RESIDUAL {correction + 1}/2",
+                )
+            final_residual = self._turn_steps_from_wheel_positions(
+                self._cycle_wheel_positions,
+                self._wheel_positions(),
             )
-            self._placement_relative_steps = 0
-        if self._forward_offset_active:
-            self._move_chassis_linear(held_positions, forward=False)
-            self._forward_offset_active = False
-        if self._alignment_steps:
-            self._rotate_by_steps(
-                held_positions,
-                -self._alignment_steps,
-                "RESTORE CAMERA OBSERVATION HEADING",
-            )
-            self._alignment_steps = 0
+            if final_residual is not None:
+                self._publish_status(
+                    "RESTORE HEADING COMPLETE | "
+                    f"encoder_residual_steps={final_residual}"
+                )
+            self._restore_world_heading(held_positions, self._cycle_yaw)
+        finally:
+            self._cycle_wheel_positions = None
+            self.detection_frames.clear()
+            self._ignore_detections = False
 
     def run_action(self):
         if shutil.which("ros2") is None or shutil.which("ign") is None:
@@ -505,6 +834,16 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._settle(current)
         self._wait_for_scene_ready()
         self._wait_for_camera_info()
+        self._identity = SortingIdentity(
+            Path(__file__).resolve().parents[1]
+            / 'src/robomaster_pick_place_sim/urdf/robomaster_ep_static.urdf'
+        )
+        deadline = time.monotonic() + 15.0
+        while not self._identity.fresh() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.1)
+        if not self._identity.fresh():
+            raise GraspActionError('Gazebo object identity poses unavailable; refusing untracked sorting')
+        self._publish_status('OBJECT IDENTITY READY | completed entities excluded from all detections')
         self._wait_for_detector_stream()
 
         success_count = 0
@@ -513,6 +852,8 @@ class GraspBottleTennisAction(GraspCubeAction):
                 completed = False
                 for retry in range(self.max_grasp_retries + 1):
                     current = self._prepare_observation_pose(initial, current, index)
+                    self._cycle_wheel_positions = self._wheel_positions()
+                    self._cycle_yaw = self._identity.yaw()
                     self._current_class = self._align_to_visual_target(current)
                     self._use_tennis_grasp = self._current_class == TENNIS
                     self.arm_2_delta = (
@@ -538,11 +879,25 @@ class GraspBottleTennisAction(GraspCubeAction):
                         success_count + 1, initial, current, index
                     )
                     current = list(self.last_position_command or current)
+                    if ok:
+                        placed = self._identity.position(self._locked_object_id)
+                        origin = self._locked_object_origin
+                        moved = (placed is not None and origin is not None and
+                                 math.hypot(placed[0]-origin[0], placed[1]-origin[1]) >= 0.08)
+                        if not moved:
+                            ok = False
+                            self._publish_status('PLACEMENT NOT VERIFIED | target did not leave source; no count increment')
+                        else:
+                            self._identity.completed.add(self._locked_object_id)
+                            self._publish_status(f'OBJECT EXCLUDED | id={self._locked_object_id} | class={self._current_class}')
                     self._restore_cycle_offsets(current)
                     if ok:
                         self.category_counts[self._current_class] += 1
                         success_count += 1
                         completed = True
+                        self._locked_object_id = None
+                        self._locked_object_origin = None
+                        self.detection_frames.clear()
                         self._publish_status(
                             "SORTED | "
                             f"total={success_count}/{self.run_count} | bottles="
@@ -596,6 +951,8 @@ def main(args=None):
             print(f"vision sorting failed to start: {error}")
     finally:
         if node is not None:
+            if node._identity is not None:
+                node._identity.close()
             node.safe_stop()
             node.close_log_file()
             node.destroy_node()

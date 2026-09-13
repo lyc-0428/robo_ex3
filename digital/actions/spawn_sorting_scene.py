@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 
 from vision_common import BOTTLE, bottle_sdf, make_slot_layout, tennis_sdf
 
@@ -87,6 +88,9 @@ def spawn(item, model_root):
             ],
             timeout=30.0,
         )
+        # ros_gz_sim may acknowledge the request before Gazebo's parser has
+        # finished opening the file. Keep it alive briefly for that handoff.
+        time.sleep(0.5)
     finally:
         sdf_path.unlink(missing_ok=True)
 
@@ -127,7 +131,7 @@ def main():
     for item in layout:
         spawn(item, args.model_root)
 
-    # Deliberately do not expose the shuffled class map to the sorting node.
+    # Entity names remain neutral; the sorting node still obtains classes from YOLO.
     print(
         "SORTING SCENE READY | "
         f"seed={args.seed} | objects=4 | bottles=2 | tennis=2 | "

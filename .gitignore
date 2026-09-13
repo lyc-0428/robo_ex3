@@ -70,3 +70,17 @@ Testing/
 __pycache__/
 *.pyc
 *.pyo
+
+digital/build/
+digital/install/
+digital/log/
+digital/logs/
+
+digital/actions/*.bak*
+digital/actions/*.before_*
+digital/actions/*.broken_*
+digital/actions/*.ball_backup
+
+digital/tests/*.before_*
+digital/tests/*.broken_*
+digital/models/**/*.bak*
