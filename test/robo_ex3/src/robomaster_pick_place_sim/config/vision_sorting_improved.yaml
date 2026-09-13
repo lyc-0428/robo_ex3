@@ -1,0 +1,66 @@
+grasp_cube_action:
+  ros__parameters:
+    use_sim_time: true
+    log_dir: /home/adam/Team21/lyc/robo_ex3/logs
+
+    # Vision stability and safe retry policy.
+    detection_timeout_seconds: 18.0
+    stable_window_frames: 5
+    stable_required_frames: 4
+    stable_center_spread_px: 35.0
+    alignment_tolerance_px: 12.0
+    alignment_kp: 0.02
+    alignment_min_speed: 0.30
+    alignment_max_speed: 1.80
+    alignment_smoothing: 0.35
+    aligned_required_frames: 4
+    max_grasp_retries: 2
+    total_slot_count: 6
+    minimum_success_count: 5
+    class_limit_per_category: 3
+
+    # Closed-loop chassis controller.  Completion requires four consecutive
+    # measured poses inside both tolerances.
+    pose_motion_timeout_seconds: 60.0
+    pose_control_rate_hz: 40.0
+    position_tolerance_m: 0.010
+    # Keep final-yaw control latched through small wheel-slip excursions; the
+    # strict 1 cm tolerance is still required before POSE REACHED.
+    position_reacquire_tolerance_m: 0.025
+    yaw_tolerance_degrees: 1.0
+    pose_stable_samples: 4
+    pose_linear_kp: 8.0
+    pose_angular_kp: 4.0
+    pose_max_linear_wheel_speed: 2.0
+    pose_max_angular_wheel_speed: 1.8
+
+    # Objects start at radius 0.47 m.  The base advances until the measured
+    # object distance matches the calibrated arm standoff.
+    bottle_grasp_standoff_m: 0.350
+    tennis_grasp_standoff_m: 0.300
+    placement_yaw_degrees: 90.0
+    placement_distance_m: 0.450
+
+    # Base-class grasp motion.  These retain the team's existing arm tuning.
+    speed_scale: 4.0
+    command_rate_hz: 100.0
+    motion_duration_seconds: 1.5
+    gripper_duration_seconds: 2.0
+    settle_duration_seconds: 0.35
+    gripper_settle_seconds: 0.75
+    cycle_pause_seconds: 0.5
+    open_offset: 0.70
+    close_offset: 0.00
+    arm_extend_delta: 1.38
+    arm_initial_fraction: 0.45
+    arm_alignment_fraction: 0.58
+    arm_coarse_fraction: 0.92
+    arm_test_lift_delta: 1.22
+    arm_lift_delta: 0.95
+    arm_2_delta: -1.38
+    wheel_speed: 3.0
+    post_turn_settle_seconds: 0.30
+    stop_on_empty_grasp: true
+    grasp_position_tolerance: 0.02
+    controller_timeout_seconds: 20.0
+    scene_ready_timeout_seconds: 90.0

@@ -1,0 +1,297 @@
+<?xml version="1.0"?>
+<robot name="robomaster_ep_core">
+  <link name="world"/>
+
+  <!-- ================= 底盘 (官方 robomaster_ros 的 chassis/armor/battery/轮子 mesh) ================= -->
+  <link name="base_link">
+    <inertial><mass value="6.0"/><origin xyz="0 0 0"/><inertia ixx="0.12" ixy="0" ixz="0" iyy="0.18" iyz="0" izz="0.22"/></inertial>
+
+    <!-- 车身 (官方 chassis_base_link 帧 + 高度差 0.0246) -->
+    <visual name="chassis">
+      <origin xyz="-0.0059 0.0004 0.0774" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/chassis.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="armor">
+      <origin xyz="-0.0065 -0.0781 0.0539" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/armor.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="battery">
+      <origin xyz="-0.1303 -0.0019 0.0420" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/battery.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="battery_pin_left">
+      <origin xyz="-0.1159 0.0661 0.0771" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/battery_pin_left.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="battery_pin_right">
+      <origin xyz="-0.1159 -0.0659 0.0771" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/battery_pin_right.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="controller">
+      <origin xyz="-0.1142 -0.0007 0.0773" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/controller.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="controller_cover">
+      <origin xyz="-0.0788 -0.0025 0.0967" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/controller_cover.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <!-- 麦克纳姆轮 (轮心抬高到半径高度, 贴地) -->
+    <visual name="front_left_wheel">
+      <origin xyz="0.10 0.10 0.0414" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/front_left_wheel.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="front_right_wheel">
+      <origin xyz="0.10 -0.10 0.0414" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/front_right_wheel.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="rear_left_wheel">
+      <origin xyz="-0.10 0.10 0.0414" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/rear_left_wheel.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="rear_right_wheel">
+      <origin xyz="-0.10 -0.10 0.0414" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/rear_right_wheel.dae" scale="1 1 1"/></geometry>
+    </visual>
+
+    <!-- 碰撞盒与官方底盘尺寸一致 (0.32x0.18x0.10 视觉外包络), 略放大留余量 -->
+    <collision><origin xyz="0 0 0.07"/><geometry><box size="0.34 0.22 0.10"/></geometry></collision>
+  </link>
+
+  <joint name="world_to_base" type="fixed">
+    <parent link="world"/><child link="base_link"/><origin xyz="0 0 0.01"/>
+  </joint>
+
+  <!-- ================= 旋转塔台 (官方 gimbal/blaster + 悬臂支架) ================= -->
+  <link name="yaw_link">
+    <inertial><mass value="0.3"/><origin xyz="0 0 0"/><inertia ixx="0.002" ixy="0" ixz="0" iyy="0.002" iyz="0" izz="0.004"/></inertial>
+
+    <visual name="turret_ring">
+      <origin xyz="0 0 0"/><geometry><cylinder radius="0.05" length="0.08"/></geometry>
+      <material name="yaw_gray"><color rgba="0.25 0.25 0.25 1"/></material>
+    </visual>
+    <!-- 云台球头+侧板 (官方 gimbal 偏航轴世界 z=0.118, 本塔台轴世界 z=0.15) -->
+    <visual name="gimbal_base">
+      <origin xyz="-0.002 0 -0.032" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gimbal_base.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="gimbal">
+      <origin xyz="0 -0.001 0.0017" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gimbal.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="gimbal_left_armor">
+      <origin xyz="-0.0047 0.0642 0.0392" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gimbal_left_armor.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="gimbal_right_armor">
+      <origin xyz="-0.0053 -0.0628 0.0411" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gimbal_right_armor.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="gimbal_side">
+      <origin xyz="-0.0003 0.0003 0.0556" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gimbal_side.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <!-- 水弹枪 -->
+    <visual name="blaster_gun">
+      <origin xyz="0.039 0.0033 0.0448" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/blaster_gun.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="blaster_magazin">
+      <origin xyz="-0.0203 0 0.0842" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/blaster_magazin.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="blaster_top">
+      <origin xyz="0.0014 0.0008 0.0726" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/blaster_top.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="speaker">
+      <origin xyz="-0.013 0.0069 -0.0056" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/speaker.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <!-- 悬臂三角腹板 x2 (塔台 -> 抬臂轴, 手臂在腹板之间摆动) -->
+    <visual name="boom_web_left">
+      <origin xyz="0.1416 0.012 0.0226" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/triangle.dae" scale="1.75 1.75 1.75"/></geometry>
+    </visual>
+    <visual name="boom_web_right">
+      <origin xyz="0.1416 -0.012 0.0226" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/triangle.dae" scale="1.75 1.75 1.75"/></geometry>
+    </visual>
+    <!-- 抬臂轴底座 (官方 arm_base, 抬臂轴在其帧内 (0.0104,-0.0256,0.0307)) -->
+    <visual name="arm_base">
+      <origin xyz="0.1687 0.0226 -0.0107" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_base.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="left_servo">
+      <origin xyz="0.1561 0.0256 -0.0168" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/left_servo.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <visual name="right_servo">
+      <origin xyz="0.1561 0.0256 -0.0168" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/right_servo.dae" scale="1 1 1"/></geometry>
+    </visual>
+
+    <collision><origin xyz="0 0 0"/><geometry><cylinder radius="0.05" length="0.08"/></geometry></collision>
+  </link>
+
+  <joint name="base_yaw_joint" type="revolute">
+    <parent link="base_link"/><child link="yaw_link"/>
+    <origin xyz="0 0 0.14" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="-3.14" upper="3.14" effort="10" velocity="2.0"/>
+    <dynamics damping="0.5" friction="0.1"/>
+  </joint>
+
+  <!-- ================= 上臂 (官方 arm_1 mesh, 锚点求解: lift 轴->(0,0,0), 腕轴->(0.28,0,0)) ================= -->
+  <link name="upper_arm_link">
+    <inertial><mass value="0.45"/><origin xyz="0.14 0 0"/><inertia ixx="0.003" ixy="0" ixz="0" iyy="0.006" iyz="0" izz="0.006"/></inertial>
+    <visual name="arm_1">
+      <origin xyz="0.1033 0.0144 -0.0055" rpy="1.9057 0.7229 1.5514"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_1.dae" scale="2.1749 2.1749 2.1749"/></geometry>
+    </visual>
+    <visual name="arm_1_cylinder">
+      <origin xyz="0.1033 0.0144 -0.0055" rpy="1.9057 0.7229 1.5514"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_1_cylinder.dae" scale="2.1749 2.1749 2.1749"/></geometry>
+    </visual>
+    <collision><origin xyz="0.14 0 0"/><geometry><box size="0.28 0.035 0.06"/></geometry></collision>
+  </link>
+
+  <joint name="arm_lift_joint" type="revolute">
+    <parent link="yaw_link"/><child link="upper_arm_link"/>
+    <origin xyz="0.18 0 0.02" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-0.8" upper="1.0" effort="20" velocity="1.0"/>
+    <dynamics damping="0.8" friction="0.1"/>
+  </joint>
+
+  <!-- ================= 前臂 (官方 arm_2 mesh, 腕轴->(0,0,0), 腕托轴->(0.19,0,0)) ================= -->
+  <link name="wrist_link">
+    <inertial><mass value="0.25"/><origin xyz="0.10 0 0"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.003" iyz="0" izz="0.003"/></inertial>
+    <visual name="arm_2">
+      <origin xyz="0.0349 0 -0.0380" rpy="1.9690 0.2584 -0.4216"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_2.dae" scale="1.5834 1.5834 1.5834"/></geometry>
+    </visual>
+    <visual name="arm_2_bar_1">
+      <origin xyz="0.0349 0 -0.0380" rpy="1.9690 0.2584 -0.4216"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_2_bar_1.dae" scale="1.5834 1.5834 1.5834"/></geometry>
+    </visual>
+    <visual name="arm_2_bar_2">
+      <origin xyz="0.0349 0 -0.0380" rpy="1.9690 0.2584 -0.4216"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/arm_2_bar_2.dae" scale="1.5834 1.5834 1.5834"/></geometry>
+    </visual>
+    <collision><origin xyz="0.10 0 0"/><geometry><box size="0.20 0.035 0.045"/></geometry></collision>
+  </link>
+
+  <joint name="wrist_pitch_joint" type="revolute">
+    <parent link="upper_arm_link"/><child link="wrist_link"/>
+    <origin xyz="0.28 0 0"/>
+    <axis xyz="0 1 0"/>
+    <limit lower="-1.5" upper="1.5" effort="10" velocity="1.0"/>
+    <dynamics damping="0.6" friction="0.1"/>
+  </joint>
+
+  <!-- ================= 腕托+手掌 (官方 endpoint_bracket + gripper_base mesh) ================= -->
+  <link name="gripper_base_link">
+    <inertial><mass value="0.15"/><origin xyz="0 0 0"/><inertia ixx="0.001" ixy="0" ixz="0" iyy="0.001" iyz="0" izz="0.001"/></inertial>
+    <!-- 腕托: 跨 (-0.03,0,0)->(0,0,0) -->
+    <visual name="endpoint_bracket">
+      <origin xyz="-0.0070 -0.0046 0.0082" rpy="-0.2310 -0.3418 1.1839"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/endpoint_bracket.dae" scale="0.9685 0.9685 0.9685"/></geometry>
+    </visual>
+    <!-- 手掌: 包围盒居中 -->
+    <visual name="gripper_base">
+      <origin xyz="-0.0334 0 0.0289" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gripper_base.dae" scale="1 1 1"/></geometry>
+    </visual>
+    <collision><geometry><box size="0.06 0.13 0.04"/></geometry></collision>
+  </link>
+
+  <joint name="wrist_to_gripper" type="fixed">
+    <parent link="wrist_link"/><child link="gripper_base_link"/>
+    <origin xyz="0.22 0 0"/>
+  </joint>
+
+  <!-- ================= 手指 (官方 gripper_left/right 三段, 拉直排布 0..0.12) ================= -->
+  <link name="left_finger_link">
+    <inertial><mass value="0.05"/><origin xyz="0.06 0 0"/><inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0004" iyz="0" izz="0.0004"/></inertial>
+    <visual name="finger_root">
+      <origin xyz="0.0063 -0.0079 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gripper_left_1.dae" scale="1.26 1.26 1.26"/></geometry>
+    </visual>
+    <visual name="finger_mid">
+      <origin xyz="0.046 0.0099 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gripper_left_5.dae" scale="1.274 1.274 1.274"/></geometry>
+    </visual>
+    <visual name="finger_tip">
+      <origin xyz="0.1032 -0.0082 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/gripper_left_7.dae" scale="0.83 0.83 0.83"/></geometry>
+    </visual>
+    <collision><origin xyz="0.06 0 0"/><geometry><box size="0.12 0.018 0.035"/></geometry></collision>
+  </link>
+
+  <link name="right_finger_link">
+    <inertial><mass value="0.05"/><origin xyz="0.06 0 0"/><inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0004" iyz="0" izz="0.0004"/></inertial>
+    <visual name="finger_root">
+      <origin xyz="0.0063 0.0079 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/right_gripper_1.dae" scale="1.26 1.26 1.26"/></geometry>
+    </visual>
+    <visual name="finger_mid">
+      <origin xyz="0.046 -0.0099 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/right_gripper_5.dae" scale="1.274 1.274 1.274"/></geometry>
+    </visual>
+    <visual name="finger_tip">
+      <origin xyz="0.1032 0.0082 0" rpy="0 0 0"/>
+      <geometry><mesh filename="package://robomaster_pick_place_sim/meshes/right_gripper_7.dae" scale="0.83 0.83 0.83"/></geometry>
+    </visual>
+    <collision><origin xyz="0.06 0 0"/><geometry><box size="0.12 0.018 0.035"/></geometry></collision>
+  </link>
+
+  <joint name="left_finger_joint" type="prismatic">
+    <parent link="gripper_base_link"/><child link="left_finger_link"/>
+    <origin xyz="0.03 0.035 0"/><axis xyz="0 1 0"/>
+    <limit lower="0.0" upper="0.045" effort="20" velocity="0.2"/>
+    <dynamics damping="2.0" friction="0.2"/>
+  </joint>
+
+  <joint name="right_finger_joint" type="prismatic">
+    <parent link="gripper_base_link"/><child link="right_finger_link"/>
+    <origin xyz="0.03 -0.035 0"/><axis xyz="0 -1 0"/>
+    <limit lower="0.0" upper="0.045" effort="20" velocity="0.2"/>
+    <dynamics damping="2.0" friction="0.2"/>
+  </joint>
+
+  <ros2_control name="GazeboSystem" type="system">
+    <hardware><plugin>gz_ros2_control/GazeboSimSystem</plugin></hardware>
+    <!-- 初始关节值 = SRDF home 位姿: 上臂上仰极限+前臂回折, 避开桌面(顶面 z=0.30) -->
+    <joint name="base_yaw_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="arm_lift_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">-0.8</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wrist_pitch_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">-1.0</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="left_finger_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.04</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_finger_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"><param name="initial_value">0.04</param></state_interface>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <gazebo>
+    <plugin filename="libgz_ros2_control-system.so" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(find robomaster_pick_place_sim)/config/controllers.yaml</parameters>
+    </plugin>
+  </gazebo>
+</robot>

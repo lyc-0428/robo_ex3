@@ -1,0 +1,49 @@
+grasp_cube_action:
+  ros__parameters:
+    # 节点会把与控制台相同的 INFO/WARN/ERROR 写入此目录。
+    log_dir: /home/nvidia/ros2_actions/logs
+
+    # 任务
+    run_count: 5
+    spawn_test_cube: true
+
+    # 细高测试柱体：5 cm x 5 cm x 12 cm，默认位于车前 35 cm。
+    cube_name: grasp_test_cube
+    cube_length: 0.05
+    cube_width: 0.05
+    cube_height: 0.12
+    cube_mass: 0.20
+    cube_friction: 5.0
+    # 连续控制时间参数
+    # 默认整体提速 4 倍；可在 1.0～5.0 之间调整。
+    speed_scale: 4.0
+    command_rate_hz: 100.0
+    motion_duration_seconds: 1.5
+    gripper_duration_seconds: 2.0
+    settle_duration_seconds: 0.35
+    gripper_settle_seconds: 0.75
+    cycle_pause_seconds: 0.5
+
+    # 已经实测通过的机械臂和夹爪动作参数
+    open_offset: 0.70
+    close_offset: 0.00
+    arm_extend_delta: 1.38
+    arm_initial_fraction: 0.45
+    arm_alignment_fraction: 0.58
+    arm_coarse_fraction: 0.92
+    arm_test_lift_delta: 1.22
+    arm_lift_delta: 0.95
+    arm_2_delta: -1.38
+
+    # 1050 x 0.001 s 为实测约 180 度的连续转向时间。
+    wheel_speed: 3.0
+    turn_steps: 1050
+    physics_step_seconds: 0.001
+    post_turn_settle_seconds: 0.30
+
+    # 控制器启动与抓取判断
+    world_service_timeout_ms: 15000
+    step_retries: 2
+    stop_on_empty_grasp: true
+    grasp_position_tolerance: 0.02
+    controller_timeout_seconds: 20.0

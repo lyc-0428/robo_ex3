@@ -1,0 +1,48 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+
+  <model name="water_bottle_03">
+
+    <static>false</static>
+
+    <link name="bottle_link">
+
+      <pose>0 0 0.105 0 0 0</pose>
+
+      <inertial>
+        <mass>0.5</mass>
+
+        <inertia>
+          <ixx>0.0019</ixx>
+          <iyy>0.0019</iyy>
+          <izz>0.0005</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+
+      <collision name="collision">
+        <geometry>
+          <cylinder>
+            <radius>0.032</radius>
+            <length>0.21</length>
+          </cylinder>
+        </geometry>
+      </collision>
+
+      <visual name="bottle_visual">
+        <pose>0 0 -0.10839878 0 0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://water_bottle_03/meshes/bottle_complete.obj</uri>
+            <scale>0.06706608 0.06706608 0.05761422</scale>
+          </mesh>
+        </geometry>
+      </visual>
+
+    </link>
+
+  </model>
+
+</sdf>
