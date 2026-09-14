@@ -19,8 +19,15 @@ class IdentityTests(unittest.TestCase):
         }
         self.boxes = [dict(class_name='tennis', bbox=dict(x1=x-15, x2=x+15, y1=225, y2=255)) for x in (224, 416)]
 
-    def select(self, locked=None, counts=None):
-        return self.identity.associate(self.boxes, None, (320,320,320,240), locked, counts)
+    def select(self, locked=None, counts=None, class_limits=None):
+        return self.identity.associate(
+            self.boxes,
+            None,
+            (320, 320, 320, 240),
+            locked,
+            counts,
+            class_limits,
+        )
 
     def test_completed_instance_stays_excluded_when_both_visible(self):
         self.identity.completed.add('task_object_0')
@@ -46,7 +53,13 @@ class IdentityTests(unittest.TestCase):
         self.assertAlmostEqual(self.identity.yaw(), 1.2)
 
     def test_class_quota_is_enforced(self):
-        self.assertEqual(self.select(counts={'tennis': 2}), [])
+        self.assertEqual(
+            self.select(
+                counts={'tennis': 2},
+                class_limits={'tennis': 2},
+            ),
+            [],
+        )
 
     def test_unknown_box_is_not_guessed(self):
         self.boxes = [dict(class_name='tennis', bbox=dict(x1=300,x2=340,y1=225,y2=255))]

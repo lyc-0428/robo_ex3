@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 import math
 from pathlib import Path
 import sys
@@ -96,36 +97,40 @@ class VisionCommonTests(unittest.TestCase):
         self.assertEqual(placement_step(values, 2), 2650)
         self.assertEqual(placement_step(values, 20), 2650)
 
-    def test_layout_places_bottles_in_middle_and_tennis_outside(self):
-        angles = [-30.0, -10.0, 10.0, 30.0]
-        first = make_slot_layout(21, 0.350, angles)
-        second = make_slot_layout(21, 0.350, angles)
+    def test_layout_has_six_randomized_well_separated_objects(self):
+        angles = [-40.0, -24.0, -8.0, 8.0, 24.0, 40.0]
+        first = make_slot_layout(21, 0.470, angles)
+        second = make_slot_layout(21, 0.470, angles)
+        different_seed = make_slot_layout(22, 0.470, angles)
         self.assertEqual(first, second)
-        self.assertEqual(sum(item["class_name"] == BOTTLE for item in first), 2)
-        self.assertEqual(sum(item["class_name"] == TENNIS for item in first), 2)
         self.assertEqual(
+            Counter(item["class_name"] for item in first),
+            Counter({BOTTLE: 3, TENNIS: 3}),
+        )
+        self.assertNotEqual(
             [item["class_name"] for item in first],
-            [TENNIS, BOTTLE, BOTTLE, TENNIS],
+            [item["class_name"] for item in different_seed],
         )
         self.assertTrue(
             all(item["z"] == 0.0 for item in first if item["class_name"] == BOTTLE)
         )
         self.assertTrue(
             all(
-                item["z"] == 0.0335
+                item["z"] == 0.027
                 for item in first
                 if item["class_name"] == TENNIS
             )
         )
         self.assertEqual(
             [item["name"] for item in first],
-            [f"task_object_{index}" for index in range(4)],
+            [f"task_object_{index}" for index in range(6)],
         )
         separations = [
-            math.hypot(right["x"] - left["x"], right["y"] - left["y"])
-            for left, right in zip(first, first[1:])
+            math.hypot(left["x"] - right["x"], left["y"] - right["y"])
+            for index, left in enumerate(first)
+            for right in first[index + 1:]
         ]
-        self.assertGreater(min(separations), 0.12)
+        self.assertGreaterEqual(min(separations), 0.12)
 
     def test_generated_object_sdf_is_valid_xml(self):
         model_root = Path(__file__).resolve().parents[1] / "models"
@@ -133,24 +138,59 @@ class VisionCommonTests(unittest.TestCase):
         bottle_xml = ET.fromstring(bottle)
         self.assertEqual(bottle_xml.find("model").attrib["name"], "task_object_0")
         self.assertIn(
-            "model://water_bottle_02/meshes/bottle_body.obj", bottle
+            "model://water_bottle_03/meshes/bottle_complete.obj", bottle
         )
-        self.assertIn(
-            "model://water_bottle_02/meshes/bottle_cap.obj", bottle
+        points = bottle_xml.findall(
+            ".//collision[@name='easy_grip_hex_prism_collision']"
+            "/geometry/polyline/point"
         )
-        for visual_name in ("bottle_body_visual", "bottle_cap_visual"):
-            pose = bottle_xml.find(
-                f".//visual[@name='{visual_name}']/pose"
-            )
-            self.assertIsNotNone(pose)
-            self.assertEqual(pose.text.strip(), "0 0 -0.105 0 0 0")
-        self.assertNotIn("WaterBottle_fortress.obj", bottle)
+        self.assertEqual(len(points), 6)
+        self.assertEqual(bottle_xml.findtext(".//link/pose"), "0 0 0 0 0 0")
+        self.assertEqual(
+            bottle_xml.findtext(".//inertial/pose"),
+            "0 0 0.100000 0 0 0",
+        )
+        self.assertEqual(
+            bottle_xml.findtext(".//visual[@name='bottle_visual']/pose"),
+            "0 0 -0.003398778 0 0 0",
+        )
+        self.assertEqual(bottle_xml.findtext(".//inertial/mass"), "0.200000000")
         tennis = ET.fromstring(tennis_sdf("task_object_1", model_root))
         self.assertIsNone(tennis.find("./model/plugin"))
-        collision = tennis.find(".//collision/geometry/cylinder")
+        collision = tennis.find(".//collision/geometry/box")
         self.assertIsNotNone(collision)
-        self.assertEqual(collision.findtext("radius"), "0.030000")
-        self.assertEqual(collision.findtext("length"), "0.060000")
+        self.assertEqual(
+            collision.findtext("size"),
+            "0.054000 0.054000 0.054000",
+        )
+        self.assertEqual(
+            tennis.findtext(".//visual/geometry/mesh/scale"),
+            "0.930000 0.930000 0.930000",
+        )
+        bottle_diffuse = bottle_xml.findtext(
+            ".//visual[@name='bottle_visual']/material/diffuse"
+        )
+        red, green, blue, alpha = map(float, bottle_diffuse.split())
+        self.assertGreater(blue, green)
+        self.assertGreater(green, red)
+        self.assertGreater(red, 0.40)
+        self.assertEqual(alpha, 1.0)
+
+    def test_every_bottle_mesh_material_is_blue(self):
+        material_path = (
+            Path(__file__).resolve().parents[1]
+            / "models/water_bottle_03/meshes/bottle_complete.mtl"
+        )
+        diffuse_colors = [
+            tuple(map(float, line.split()[1:4]))
+            for line in material_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith("Kd ")
+        ]
+        self.assertGreaterEqual(len(diffuse_colors), 4)
+        self.assertTrue(
+            all(blue > green > red for red, green, blue in diffuse_colors)
+        )
+        self.assertTrue(all(red >= 0.45 for red, _green, _blue in diffuse_colors))
 
 
 if __name__ == "__main__":
