@@ -1,0 +1,57 @@
+% auto-generated from git log --author=LpTriX
+\texttt{45abec9} & 09-13 20:30 & vision: bottle 扫参判读 (规则2) → power=20, closed\_fast=2.0 \\
+\texttt{39f6143} & 09-13 06:37 & vision: 移交 README 记录二轮 dry-run 结果 + 有效带下限待观察项 \\
+\texttt{49a542f} & 09-13 06:17 & vision: 视觉联动定点抓取 (calibrate.py + vision\_pick\_place.py) + 移交 README \\
+\texttt{c94d34e} & 09-13 03:59 & vision: FP16 定为默认验收引擎 (实机 A/B 确认效果更好) \\
+\texttt{3c49f23} & 09-13 03:53 & vision: README 记录 FP16 实测 29.7ms \\
+\texttt{86b5354} & 09-13 03:51 & vision: README 记录真机实测数据 (FP32 \~\{\}70ms, conf 0.83-0.94) \\
+\texttt{d8091e9} & 09-13 03:39 & vision: fix log-line fps (was cumulative-count/2s, not a rate) \\
+\texttt{230522e} & 09-13 03:37 & vision: fix FPS display stuck at 0.00 (ms-\textgreater{}fps unit conversion) \\
+\texttt{584674b} & 09-13 03:34 & vision: 视觉检测节点 (SDK 相机 + TRT YOLOv8s) 部署全流程 \\
+\texttt{667923d} & 09-13 02:32 & real: add camera pipeline debug scripts \\
+\texttt{545aea7} & 09-13 02:18 & real: throttle Empty-exception spam when stream stalls \\
+\texttt{1e05efc} & 09-13 02:11 & real: window-first viewer, selftest mode, strip ROS env, fix tee whitespace \\
+\texttt{e00a82a} & 09-13 01:57 & real: retry SDK init 3x for flaky robot WiFi \\
+\texttt{fb4ba67} & 09-13 01:54 & real: live-flush tee log + os.\_exit to survive SDK shutdown hangs \\
+\texttt{3717d36} & 09-13 01:44 & real: text-SDK fallback on SDK init failure; update AP hint to new controller SSID \\
+\texttt{5141e14} & 09-13 01:21 & real: camera\_viewer v2 main-thread display + watchdog cleanup (SDK stop/close hangs) \\
+\texttt{9330fbf} & 09-13 00:59 & real: live-stream diagnostic + Team21 paths, socket spy patches methods not the socket class \\
+\texttt{e90c18e} & 09-11 17:00 & real: H264 decoder assign pts to parsed packets (PyAV 17 reorder buffer fix) \\
+\texttt{3659fbe} & 09-11 16:48 & real: live camera viewer with PyAV H264 decoder \\
+\texttt{d5f8c04} & 09-11 15:11 & exp2: real robot acceptance video and run log (4/5 passed) \\
+\texttt{422513c} & 09-11 14:45 & real: name desktop run logs test\_\textless{}timestamp\textgreater{}.txt \\
+\texttt{20d9356} & 09-10 21:21 & real: desktop run logs, acceptance line, package ROS2 node \\
+\texttt{7ecd31d} & 09-10 21:00 & gripper judgment: decide by close time (tennis ball fix) \\
+\texttt{79f9dbb} & 09-10 20:48 & real: 主脚本参数非法时给出友好提示而不是裸崩 \\
+\texttt{b20ee4e} & 09-10 20:42 & real: 扫描探针无论成败都保存日志到桌面 \\
+\texttt{a9d6afc} & 09-10 20:26 & real: 扫描探针输出保存到桌面, 带标记和时间戳文件名 \\
+\texttt{8d6548c} & 09-10 20:23 & real: 新增功率-状态扫描探针 (网球调试) \\
+\texttt{e306600} & 09-10 20:10 & real: 探针支持指定闭合功率, 主脚本支持命令行覆盖 GRIP\_POWER \\
+\texttt{dd14b7f} & 09-10 19:53 & fix(real): 判定改为稳定窗口, 修复空夹中途 normal 的竞态误判 \\
+\texttt{86d2162} & 09-10 19:41 & real: probe 增加 WiFi 预检, 未连机器人热点时给出明确提示 \\
+\texttt{907c028} & 09-10 19:32 & fix(real): poll gripper status instead of pausing mid-close \\
+\texttt{d5a6e71} & 09-10 19:12 & real: README 补充 libmedia\_codec 存根一次性配置 (aarch64 无 .so) \\
+\texttt{4079d1c} & 09-10 19:03 & real: 改用 pip 安装的官方 SDK, 移除 \~\{\}/RoboMaster-SDK/src 路径注入 \\
+\texttt{6f5b743} & 09-10 18:39 & real: 夹爪完全闭合判定 + 机器人端报错/报成功显示 \\
+\texttt{5f7fa1f} & 09-10 16:14 & lpx: 机械臂定点抓取完整方案 — 仿真 MoveIt 抓取 + EP 真机驱动(伪装 ros2\_control) + 标定工具 + 真机手册 \\
+\texttt{f019182} & 09-10 16:10 & docs: libmedia\_codec 存根修正 — LiveView 会实例化 H264Decoder/OpusDecoder, 存根需含空类 \\
+\texttt{8cd6787} & 09-10 13:13 & 驱动退出清理 + runbook 更新为板上实际部署步骤 (ep\_ws 布局/符号链接/site-packages 存根) \\
+\texttt{ea1fb71} & 09-10 12:51 & 真机驱动包: EP SDK 驱动伪装 ros2\_control 接口 + 标定工具 + 真机 launch/参数/手册 \\
+\texttt{298865c} & 09-09 22:19 & 重构规划: 解析逆解+关节目标替代 OMPL 路径约束; 重标定 4 个预设点 \\
+\texttt{98d6387} & 09-09 21:53 & 修复联调第二批问题: meshes 未安装 + ACM 字段名/语义错误 \\
+\texttt{7c4701b} & 09-09 21:50 & 修复验收联调三处问题 + 视觉升级: 官方 mesh 移植进 URDF \\
+\texttt{0d27eea} & 09-09 21:24 & 修复抓取几何: home 位姿上仰避障 + 可达性驱动的抓取流程重写 \\
+\texttt{3ec7144} & 09-09 21:07 & 修复 move\_group 参数结构: planning\_pipelines 列表 + 标准控制器配置 + 轨迹执行改用 Action \\
+\texttt{0ac2aad} & 09-09 20:46 & 修复: move\_group.launch.py 的 robot\_description 同样用 ParameterValue(str) 包裹 \\
+\texttt{aa1d9fd} & 09-09 20:42 & 修复: launch 文件中 robot\_description 用 ParameterValue(value\_type=str) 包裹 \\
+\texttt{ceefa5e} & 09-09 20:34 & 修复: 补充 setup.cfg 把 console\_scripts 装到 lib/\textless{}pkg\textgreater{} (ament\_python 惯例) \\
+\texttt{e2bcdb3} & 09-09 20:30 & 重构: 抓取节点改用 MoveIt 原生接口, 去掉 moveit\_commander 依赖 \\
+\texttt{ea8409b} & 09-09 17:24 & 文档: README 使用指南 + .gitignore \\
+\texttt{c5b3dbc} & 09-09 17:23 & 新增: MoveIt 抓取节点与辅助脚本 \\
+\texttt{5fae9b7} & 09-09 17:18 & 新增: 一体化 launch 一键启动 Gazebo + MoveIt + 抓取任务 \\
+\texttt{fdd4858} & 09-09 17:18 & 新增: MoveIt 配置包 robomaster\_ep\_moveit\_config \\
+\texttt{0475f3d} & 09-09 17:16 & 新增: 仿真世界中加入桌面、A/B 标记和目标物体 \\
+\texttt{231a1ee} & 09-09 17:15 & 新增: 底盘偏航关节 base\_yaw\_joint, 工作空间扩展为桌面圆环区域 \\
+\texttt{152edaa} & 09-09 17:14 & 修复: 控制器配置路径参数化为 \$(find), launch 改用 spawner 加载控制器 \\
+% end
+\bottomrule
