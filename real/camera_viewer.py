@@ -1,288 +1,201 @@
 #!/usr/bin/env python3
-"""机器人云台摄像头实时显示 (板子接显示器, 弹窗看画面)。
+# -*- coding: utf-8 -*-
 
-v2: 不依赖 SDK 的后台显示线程 (display=True 换板后不弹窗, 且 stop/close
-    会卡死), 改为主线程自己 read_cv2_image + imshow, 帧率实时打印, 日志落盘。
-
-依赖 (Team21 venv 已装好):
-  - av 17.1.0 + libmedia_codec.py 真解码器 (PyAV pts 递增)
-  - opencv-python 5.x
-
-用法:
-    cd ~/Team21/colcon_ws/src/robomaster_pick_place_sim
-    ~/Team21/Team21/bin/python3 real/camera_viewer.py --selftest   # 只测弹窗 (校园网下就行)
-    ~/Team21/Team21/bin/python3 real/camera_viewer.py 360p         # 连机器人热点后看直播
-    ~/Team21/Team21/bin/python3 real/camera_viewer.py              # 默认 720p
-手机 RoboMaster App 必须断开机器人 (视频流只给一个客户端)。
-
-日志: ~/Team21/logs/camera_viewer_<时间戳>.txt
 """
+RoboMaster EP 实时摄像头查看器（无 WiFi 名称检查版）
+
+用法：
+    python3 real/camera_viewer.py
+    python3 real/camera_viewer.py 360p
+    python3 real/camera_viewer.py 720p
+
+说明：
+- 不再调用 nmcli，也不检查 Current WiFi / RMEP 名称。
+- 直接通过 RoboMaster SDK:
+      ep.initialize(conn_type="ap")
+  判断是否真正连接到机器人。
+- Jetson 显示器实时显示 RoboMaster 相机画面。
+- q / ESC / Ctrl+C 退出。
+"""
+
 import os
-import subprocess
 import sys
 import threading
 import time
-import traceback
 
-LOG_DIR = os.path.expanduser("~/Team21/logs")
-LOG_LINES = []
-_LIVE_PATH = None
-_LIVE_FILE = None
-
-
-class _Tee:
-    def __init__(self, stream):
-        self.stream = stream
-
-    def write(self, text):
-        self.stream.write(text)
-        if text.strip():
-            LOG_LINES.append(text.rstrip("\n"))
-        # 实时落盘: 进程卡死/被强杀也能留下完整日志 (2026-09-13 踩过)。
-        # 必须写原始 text: print 会把分隔符/换行拆成单独一次 write,
-        # 之前被 text.strip() 挡掉, 导致日志文件里空格和换行全丢。
-        if _LIVE_FILE is not None:
-            try:
-                _LIVE_FILE.write(text)
-                _LIVE_FILE.flush()
-            except Exception:
-                pass
-        return len(text)
-
-    def flush(self):
-        self.stream.flush()
-
-    def __getattr__(self, name):
-        return getattr(self.stream, name)
-
-
-def _open_live_log():
-    global _LIVE_PATH, _LIVE_FILE
+# 尽量让 SSH 终端启动时也能把 OpenCV 窗口显示到 Jetson 本地显示器
+if not os.environ.get("DISPLAY"):
+    os.environ["DISPLAY"] = ":0"
     try:
-        os.makedirs(LOG_DIR, exist_ok=True)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        _LIVE_PATH = os.path.join(LOG_DIR, f"camera_viewer_{stamp}.txt")
-        _LIVE_FILE = open(_LIVE_PATH, "w")
-    except Exception:
-        _LIVE_FILE = None
-
-
-def save_log():
-    try:
-        if _LIVE_PATH:
-            print(f"日志已保存: {_LIVE_PATH}")
-            return
-        os.makedirs(LOG_DIR, exist_ok=True)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        path = os.path.join(LOG_DIR, f"camera_viewer_{stamp}.txt")
-        with open(path, "w") as f:
-            f.write("\n".join(LOG_LINES) + "\n")
-        print(f"日志已保存: {path}")
-    except Exception as e:
-        print(f"保存日志失败: {e}")
-
-
-def current_wifi_ssid():
-    """返回板子当前连接的 WiFi SSID; 读不到返回 ""。"""
-    try:
-        out = subprocess.run(
-            ["nmcli", "-t", "-f", "active,ssid", "dev", "wifi"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout
-        for line in out.splitlines():
-            if line.startswith("yes:"):
-                return line.split(":", 1)[1]
-    except Exception:
-        return "?"
-    return ""
-
-
-def setup_display():
-    """SSH 里跑也要能弹窗到板子的显示器上。"""
-    if not os.environ.get("DISPLAY"):
-        os.environ["DISPLAY"] = ":0"
-        try:
-            for name in sorted(os.listdir("/tmp/.X11-unix")):
-                if name.startswith("X"):
-                    os.environ["DISPLAY"] = ":" + name[1:]
-                    break
-        except OSError:
-            pass
-    if not os.environ.get("XAUTHORITY"):
-        for cand in ("/run/user/1000/gdm/Xauthority",
-                     os.path.expanduser("~/.Xauthority")):
-            if os.path.exists(cand):
-                os.environ["XAUTHORITY"] = cand
+        xs = sorted(os.listdir("/tmp/.X11-unix"))
+        for name in xs:
+            if name.startswith("X"):
+                os.environ["DISPLAY"] = ":" + name[1:]
                 break
-    print("DISPLAY:", os.environ.get("DISPLAY"),
-          "XAUTHORITY:", os.environ.get("XAUTHORITY", "(无)"))
+    except OSError:
+        pass
+
+if not os.environ.get("XAUTHORITY"):
+    for cand in (
+        "/run/user/1000/gdm/Xauthority",
+        os.path.expanduser("~/.Xauthority"),
+    ):
+        if os.path.exists(cand):
+            os.environ["XAUTHORITY"] = cand
+            break
+
+import cv2
+from robomaster import robot
 
 
-def cleanup_with_timeout(ep):
-    """SDK 的 stop_video_stream/close 可能卡死, 放守护线程里限时 5 秒。"""
-    def _clean():
-        try:
-            ep.camera.stop_video_stream()
-        except Exception as e:
-            print("stop_video_stream warning:", e)
+WINDOW_NAME = "RoboMaster LiveView"
+
+
+def cleanup_with_timeout(ep, camera_started):
+    """避免 SDK 的 stop/close 偶尔卡住导致程序退不出去。"""
+
+    def _cleanup():
+        if camera_started:
+            try:
+                ep.camera.stop_video_stream()
+            except Exception as e:
+                print("stop_video_stream warning:", e)
+
         try:
             ep.close()
         except Exception as e:
-            print("close warning:", e)
+            print("ep.close warning:", e)
 
-    t = threading.Thread(target=_clean, daemon=True)
+    t = threading.Thread(target=_cleanup, daemon=True)
     t.start()
     t.join(5)
+
     if t.is_alive():
-        print("WARN: SDK 清理超时 (>5s), 直接退出 (守护线程会被回收)")
-
-
-def _run():
-    setup_display()
-
-    # 防御: 用户 shell 可能 source 过 ROS, LD_LIBRARY_PATH/PYTHONPATH 会
-    # 顶掉 cv2 依赖的 Qt/numpy, 弹窗时出诡异问题 (2026-09-13 板子上踩过:
-    # 进程 100% CPU 空转在 namedWindow)。必须在 import cv2 之前清掉。
-    os.environ.pop("LD_LIBRARY_PATH", None)
-    os.environ.pop("PYTHONPATH", None)
-
-    import cv2
-    import numpy as np
-
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    resolution = args[0] if args else "720p"
-    if resolution not in ("360p", "540p", "720p"):
-        print(f"ERROR: 不支持的分辨率 {resolution!r}, 可选 360p/540p/720p")
-        sys.exit(1)
-
-    # 先弹窗口、后连机器人: 窗口 1 秒内就该出现。
-    # 没出现 = 板子显示环境 (X/Qt) 卡死, 不用等机器人, 重启板子再试。
-    win_name = "RoboMaster LiveView"
-    cv2.namedWindow(win_name, cv2.WINDOW_NORMAL)
-    black = np.zeros((360, 640, 3), np.uint8)
-    cv2.putText(black, "waiting robot...", (20, 200),
-                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-    cv2.imshow(win_name, black)
-    cv2.waitKey(1)
-    print(f"窗口 {win_name!r} 已创建 —— 显示器上应该已经能看到它。")
-    print("如果 5 秒内没看到窗口: Ctrl+C 退出, 重启板子再试 (显示环境卡死)。")
-
-    if "--selftest" in sys.argv:
-        print("selftest 模式: 3 秒后自动关窗口退出 (看到窗口 = 显示链路正常)。")
-        cv2.waitKey(3000)
-        cv2.destroyAllWindows()
-        return
-
-    # 预检: 板子必须已连机器人热点
-    ssid = current_wifi_ssid()
-    print(f"current wifi: {ssid!r}")
-    if not ssid.startswith("RMEP"):
-        print("ERROR: 板子当前不在机器人热点上, 中止。")
-        print("       先开机机器人, 然后执行: nmcli connection up RMEP-21bdc0  (新中控的热点)")
-        cv2.destroyAllWindows()
-        sys.exit(1)
-
-    from robomaster import robot
-
-    ep = robot.Robot()
-    initialized = False
-    for attempt in range(1, 4):
-        try:
-            initialized = ep.initialize(conn_type="ap")
-        except Exception as e:
-            print(f"初始化第 {attempt} 次异常: {type(e).__name__}: {e}")
-        if initialized:
-            break
-        if attempt < 3:
-            print(f"初始化第 {attempt} 次失败, 5 秒后重试 "
-                  f"(WiFi 闪断时常见, 检查手机 WiFi 是否关掉) ...")
-            time.sleep(5)
-    if not initialized:
-        print("ERROR: 连不上机器人 (重试 3 次失败)。")
-        print("       检查: 机器人是否开机 / WiFi 是否闪断 / 手机是否占着热点")
-        sys.exit(1)
-
-    print(f"开启视频流 ({resolution}) ...")
-    ok = ep.camera.start_video_stream(display=False, resolution=resolution)
-    if not ok:
-        print("ERROR: 视频流开启失败 (检查手机 App 是否还连着机器人)")
-        cleanup_with_timeout(ep)
-        sys.exit(1)
-
-    print("视频流已开启, 等帧中 ...")
-
-    frames = 0
-    first_saved = False
-    t0 = time.time()
-    last_heartbeat = t0
-    try:
-        while True:
-            try:
-                img = ep.camera.read_cv2_image(timeout=2, strategy="newest")
-            except Exception as e:
-                # 队列 Empty 属正常 (流中断/切换网络时), 5 秒报一次, 别刷屏
-                now = time.time()
-                if now - last_heartbeat >= 5:
-                    print(f"[t={now-t0:.0f}s] read_cv2_image 异常: "
-                          f"{type(e).__name__}: {e}")
-                    last_heartbeat = now
-                cv2.waitKey(1)
-                continue
-            if img is None:
-                # 5 秒没帧才打一次心跳, 避免刷屏
-                now = time.time()
-                if now - last_heartbeat >= 5:
-                    print(f"[t={now-t0:.0f}s] 暂无帧 ...")
-                    last_heartbeat = now
-                cv2.waitKey(1)
-                continue
-
-            frames += 1
-            cv2.imshow(win_name, img)
-            cv2.waitKey(1)
-
-            if not first_saved:
-                first_saved = True
-                png = os.path.join(LOG_DIR, "viewer_frame0.png")
-                cv2.imwrite(png, img)
-                print(f"首帧 {img.shape[1]}x{img.shape[0]} 已存 {png}")
-
-            now = time.time()
-            if now - t0 >= 2.0:
-                fps = frames / (now - t0)
-                print(f"fps={fps:.1f}  累计 {frames} 帧  ({img.shape[1]}x{img.shape[0]})")
-                t0 = now
-    except KeyboardInterrupt:
-        print("Interrupted by user.")
-
-    cv2.destroyAllWindows()
-    cleanup_with_timeout(ep)
-    print("camera viewer done.")
+        print("WARN: SDK 清理超过 5 秒，直接结束程序。")
 
 
 def main():
-    _open_live_log()
-    sys.stdout = _Tee(sys.stdout)
-    sys.stderr = _Tee(sys.stderr)
-    code = 0
+    resolution = "720p"
+
+    if len(sys.argv) >= 2:
+        resolution = sys.argv[1].strip().lower()
+
+    if resolution not in ("360p", "540p", "720p"):
+        print("分辨率只支持: 360p / 540p / 720p")
+        return 2
+
+    print("==========================================")
+    print("RoboMaster Camera Viewer")
+    print("==========================================")
+    print("WiFi SSID check: DISABLED")
+    print("实际连接由 RoboMaster SDK initialize() 判断")
+    print("resolution:", resolution)
+    print(
+        "DISPLAY:",
+        os.environ.get("DISPLAY"),
+        "XAUTHORITY:",
+        os.environ.get("XAUTHORITY", "(无)"),
+    )
+    print()
+    print("注意：手机 RoboMaster App 请断开机器人。")
+    print("机器人摄像头同一时间只能被一路程序占用。")
+    print("q / ESC / Ctrl+C 退出")
+    print("==========================================")
+
+    ep = robot.Robot()
+    initialized = False
+    camera_started = False
+
     try:
-        _run()
-    except SystemExit as e:
-        code = e.code if isinstance(e.code, int) else 0
-    except BaseException:
-        traceback.print_exc()
-        code = 1
-    finally:
-        save_log()
-        if _LIVE_FILE is not None:
+        print("\n[1] 正在连接 RoboMaster ...")
+
+        result = ep.initialize(conn_type="ap")
+
+        # 有的 SDK 版本 initialize() 成功后返回 None，
+        # 所以不能只用 if not result 判断失败。
+        initialized = True
+
+        print("[OK] RoboMaster SDK 初始化完成")
+        if result is not None:
+            print("initialize result:", result)
+
+        print("\n[2] 正在启动视频流 ...")
+
+        start_result = ep.camera.start_video_stream(
+            display=False,
+            resolution=resolution,
+        )
+        camera_started = True
+
+        print("[OK] 视频流启动命令已发送")
+        if start_result is not None:
+            print("start_video_stream result:", start_result)
+
+        cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+
+        print("\n[3] 正在等待相机画面 ...")
+
+        first_frame = True
+        empty_count = 0
+
+        while True:
             try:
-                _LIVE_FILE.close()
-            except Exception:
-                pass
-        # SDK 的非守护线程会让解释器退出卡死 (2026-09-13 踩过),
-        # 日志已实时落盘, 直接硬退出
-        os._exit(code)
+                frame = ep.camera.read_cv2_image(
+                    strategy="newest",
+                    timeout=3,
+                )
+            except TypeError:
+                # 兼容某些 SDK 版本没有 timeout 参数
+                frame = ep.camera.read_cv2_image(strategy="newest")
+
+            if frame is None:
+                empty_count += 1
+
+                if empty_count == 1 or empty_count % 10 == 0:
+                    print(f"暂未收到画面 ({empty_count}) ...")
+
+                # 一直收不到帧时也让窗口事件有机会处理
+                key = cv2.waitKey(30) & 0xFF
+                if key in (ord("q"), 27):
+                    break
+
+                continue
+
+            empty_count = 0
+
+            if first_frame:
+                h, w = frame.shape[:2]
+                print(f"[OK] 收到第一帧: {w}x{h}")
+                print(f"[OK] Jetson 显示窗口: {WINDOW_NAME}")
+                first_frame = False
+
+            # RoboMaster SDK 的 read_cv2_image 已返回可供 OpenCV 显示的图像
+            cv2.imshow(WINDOW_NAME, frame)
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                break
+
+    except KeyboardInterrupt:
+        print("\n收到 Ctrl+C，退出。")
+
+    except Exception as e:
+        print("\nERROR:", repr(e))
+        print()
+        print("如果这里是视频解码相关错误，请检查：")
+        print("  python3 -c \"import av; print(av.__version__)\"")
+        print("以及 ~/.local/lib/python3.10/site-packages/libmedia_codec.py")
+        return 1
+
+    finally:
+        cv2.destroyAllWindows()
+
+        if initialized:
+            cleanup_with_timeout(ep, camera_started)
+
+    print("Camera viewer finished.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
