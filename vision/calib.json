@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "date": "2026-09-13T05:50:06",
+  "complete": true,
+  "arm_pose": "recenter",
+  "resolution": "360p",
+  "engine": "/home/nvidia/Team21/vision/yolov8s_fp16.engine",
+  "grid": {
+    "d_mm": [
+      196,
+      216,
+      266
+    ],
+    "l_mm": [
+      -100,
+      0,
+      100
+    ]
+  },
+  "points": [
+    {
+      "i": 0,
+      "d_mm": 196,
+      "l_mm": -100,
+      "u": 208.0,
+      "v": 266.0,
+      "n_samples": 10,
+      "std_px": 0.3,
+      "skipped": false
+    },
+    {
+      "i": 1,
+      "d_mm": 196,
+      "l_mm": 0,
+      "u": 315.5,
+      "v": 262.0,
+      "n_samples": 10,
+      "std_px": 0.4,
+      "skipped": false
+    },
+    {
+      "i": 2,
+      "d_mm": 196,
+      "l_mm": 100,
+      "u": 414.5,
+      "v": 257.0,
+      "n_samples": 10,
+      "std_px": 0.15,
+      "skipped": false
+    },
+    {
+      "i": 3,
+      "d_mm": 216,
+      "l_mm": -100,
+      "u": 233.0,
+      "v": 236.0,
+      "n_samples": 10,
+      "std_px": 0.0,
+      "skipped": false
+    },
+    {
+      "i": 4,
+      "d_mm": 216,
+      "l_mm": 0,
+      "u": 314.0,
+      "v": 235.0,
+      "n_samples": 10,
+      "std_px": 0.49,
+      "skipped": false
+    },
+    {
+      "i": 5,
+      "d_mm": 216,
+      "l_mm": 100,
+      "u": 394.75,
+      "v": 234.0,
+      "n_samples": 10,
+      "std_px": 0.25,
+      "skipped": false
+    },
+    {
+      "i": 6,
+      "d_mm": 266,
+      "l_mm": -100,
+      "u": 242.5,
+      "v": 201.0,
+      "n_samples": 10,
+      "std_px": 0.0,
+      "skipped": false
+    },
+    {
+      "i": 7,
+      "d_mm": 266,
+      "l_mm": 0,
+      "u": 306.5,
+      "v": 201.0,
+      "n_samples": 10,
+      "std_px": 0.15,
+      "skipped": false
+    },
+    {
+      "i": 8,
+      "d_mm": 266,
+      "l_mm": 100,
+      "u": 366.0,
+      "v": 200.0,
+      "n_samples": 10,
+      "std_px": 0.0,
+      "skipped": false
+    }
+  ],
+  "H": [
+    [
+      0.1275525741472368,
+      -0.948662502153723,
+      -85.15110029838208
+    ],
+    [
+      -1.4395079256019154,
+      0.2503654675467516,
+      391.037503878443
+    ],
+    [
+      0.00042176676696926204,
+      -0.010060459948051237,
+      1.0
+    ]
+  ],
+  "fit": {
+    "rms_mm": 1.12,
+    "max_mm": 10.5,
+    "used": 9,
+    "outliers": []
+  }
+}
