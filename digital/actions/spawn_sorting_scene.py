@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 import time
 
+from placement_zone import placement_distance_for_attempt
 from vision_common import (
     BOTTLE,
     TENNIS,
@@ -28,6 +29,28 @@ WORLD_REMOVE_SERVICE = "/world/pick_place/remove"
 DEFAULT_MODEL_ROOT = Path(__file__).resolve().parents[1] / "models"
 DEFAULT_ANGLES = (-40.0, -24.0, -8.0, 8.0, 24.0, 40.0)
 TENNIS_ONLY_ANGLES = DEFAULT_ANGLES
+
+# ----------------------------------------------------------------------
+# Purely visual Gazebo floor markers.
+#
+# IMPORTANT:
+# These markers intentionally contain NO <collision> element.
+# They are only visual guides and must never influence simulation physics.
+# ----------------------------------------------------------------------
+MARKER_SIDE = 0.120
+MARKER_BORDER = 0.008
+MARKER_HEIGHT = 0.003
+MARKER_Z = MARKER_HEIGHT * 0.5
+
+# Keep these equal to grasp_bottle_tennis.py defaults.
+PLACEMENT_DISTANCE_START = 0.850
+PLACEMENT_DISTANCE_DECREMENT = 0.120
+PLACEMENT_DISTANCE_MINIMUM = 0.250
+
+# Object position relative to chassis while held at the release pose.
+# These reuse the grasp standoff used by the sorting controller.
+BOTTLE_RELEASE_OFFSET = 0.350
+TENNIS_RELEASE_OFFSET = 0.300
 
 
 def make_tennis_only_layout(radius, min_separation=0.12):
@@ -70,6 +93,243 @@ def run(command, timeout=30.0, check=True):
             f"command failed ({result.returncode}): {' '.join(command)}\n{result.stdout}"
         )
     return result
+
+
+def square_marker_sdf(name, side=MARKER_SIDE, border=MARKER_BORDER):
+    """Return a visual-only black square frame.
+
+    The model contains four thin box visuals and deliberately has no
+    collision geometry, inertial body, contact settings, or friction.
+    """
+    side = float(side)
+    border = float(border)
+
+    if side <= 0.0:
+        raise ValueError("marker side must be positive")
+    if border <= 0.0 or border >= side * 0.5:
+        raise ValueError("marker border width is invalid")
+
+    edge = (side - border) * 0.5
+
+    def visual(name_suffix, x, y, size_x, size_y):
+        return f"""
+      <visual name="{name_suffix}">
+        <pose>{x:.9f} {y:.9f} 0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>{size_x:.9f} {size_y:.9f} {MARKER_HEIGHT:.9f}</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0 0 0 1</ambient>
+          <diffuse>0 0 0 1</diffuse>
+          <specular>0 0 0 1</specular>
+        </material>
+      </visual>"""
+
+    sdf = f"""<?xml version="1.0"?>
+<sdf version="1.7">
+  <model name="{name}">
+    <static>true</static>
+    <link name="marker_link">
+{visual("top", 0.0, edge, side, border)}
+{visual("bottom", 0.0, -edge, side, border)}
+{visual("left", -edge, 0.0, border, side)}
+{visual("right", edge, 0.0, border, side)}
+    </link>
+  </model>
+</sdf>
+"""
+
+    # This is a safety contract, not merely a test.
+    if "<collision" in sdf.lower():
+        raise RuntimeError(
+            f"visual marker {name} unexpectedly contains collision geometry"
+        )
+
+    return sdf
+
+
+def spawn_marker(name, x, y):
+    """Spawn one static visual-only marker in the Gazebo world."""
+    sdf_text = square_marker_sdf(name)
+
+    if "<collision" in sdf_text.lower():
+        raise RuntimeError(
+            f"refusing to spawn {name}: collision geometry detected"
+        )
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        suffix=".sdf",
+        delete=False,
+    ) as stream:
+        stream.write(sdf_text)
+        sdf_path = Path(stream.name)
+
+    try:
+        run(
+            [
+                "ros2",
+                "run",
+                "ros_gz_sim",
+                "create",
+                "-world",
+                "pick_place",
+                "-name",
+                name,
+                "-file",
+                str(sdf_path),
+                "-x",
+                f"{float(x):.9f}",
+                "-y",
+                f"{float(y):.9f}",
+                "-z",
+                f"{MARKER_Z:.9f}",
+            ],
+            timeout=30.0,
+        )
+
+        # Keep the temporary SDF alive until Gazebo has consumed it.
+        time.sleep(0.15)
+
+    finally:
+        sdf_path.unlink(missing_ok=True)
+
+
+def make_goal_marker_layout(layout):
+    """Compute six expected object release locations.
+
+    The sorting controller always selects camera-left first.  With the robot
+    starting at world (0, 0) facing +X, this is descending slot angle.
+
+    Bottle placement:
+        right side, -90 degrees
+
+    Tennis placement:
+        left side, +90 degrees
+
+    The marker is placed at the expected OBJECT centre, not chassis centre,
+    therefore the held-object standoff is added to placement travel.
+    """
+    ordered = sorted(
+        layout,
+        key=lambda item: float(item["angle_degrees"]),
+        reverse=True,
+    )
+
+    goals = []
+
+    for attempt, item in enumerate(ordered, start=1):
+        class_name = item["class_name"]
+
+        if class_name not in (BOTTLE, TENNIS):
+            raise ValueError(
+                f"cannot make placement marker for class {class_name!r}"
+            )
+
+        travel = placement_distance_for_attempt(
+            PLACEMENT_DISTANCE_START,
+            PLACEMENT_DISTANCE_DECREMENT,
+            PLACEMENT_DISTANCE_MINIMUM,
+            attempt,
+        )
+
+        if class_name == BOTTLE:
+            # Robot right = world -Y when initial yaw is zero.
+            release_offset = BOTTLE_RELEASE_OFFSET
+            direction = -1.0
+        else:
+            # Robot left = world +Y when initial yaw is zero.
+            release_offset = TENNIS_RELEASE_OFFSET
+            direction = 1.0
+
+        object_distance = travel + release_offset
+
+        goals.append(
+            {
+                "name": f"goal_marker_{attempt - 1}",
+                "attempt": attempt,
+                "class_name": class_name,
+                "source_name": item["name"],
+                "x": 0.0,
+                "y": direction * object_distance,
+                "travel_distance": travel,
+                "release_offset": release_offset,
+            }
+        )
+
+    return goals
+
+
+def spawn_scene_markers(layout):
+    """Spawn exactly six initial and six final visual markers."""
+    if len(layout) != 6:
+        raise ValueError(
+            f"marker layout requires exactly six objects, got {len(layout)}"
+        )
+
+    initial_markers = []
+
+    for index, item in enumerate(layout):
+        marker = {
+            "name": f"initial_marker_{index}",
+            "x": float(item["x"]),
+            "y": float(item["y"]),
+            "class_name": item["class_name"],
+            "source_name": item["name"],
+        }
+
+        initial_markers.append(marker)
+
+    goal_markers = make_goal_marker_layout(layout)
+
+    if len(initial_markers) != 6 or len(goal_markers) != 6:
+        raise RuntimeError("expected exactly 6 initial + 6 goal markers")
+
+    for marker in initial_markers:
+        spawn_marker(
+            marker["name"],
+            marker["x"],
+            marker["y"],
+        )
+
+        print(
+            "INITIAL MARKER | "
+            f"name={marker['name']} | "
+            f"object={marker['source_name']} | "
+            f"class={marker['class_name']} | "
+            f"x={marker['x']:.3f} | "
+            f"y={marker['y']:.3f} | "
+            "collision=false"
+        )
+
+    for marker in goal_markers:
+        spawn_marker(
+            marker["name"],
+            marker["x"],
+            marker["y"],
+        )
+
+        print(
+            "GOAL MARKER | "
+            f"name={marker['name']} | "
+            f"attempt={marker['attempt']} | "
+            f"object={marker['source_name']} | "
+            f"class={marker['class_name']} | "
+            f"x={marker['x']:.3f} | "
+            f"y={marker['y']:.3f} | "
+            f"travel={marker['travel_distance']:.3f} | "
+            f"held_offset={marker['release_offset']:.3f} | "
+            "collision=false"
+        )
+
+    print(
+        "VISUAL MARKERS READY | "
+        "initial=6 | goal=6 | total=12 | collision=false"
+    )
+
 
 
 def remove_if_present(name, timeout_ms):
@@ -212,6 +472,9 @@ def main():
             args.slot_angles,
             min_separation=args.minimum_separation,
         )
+    # Keep the complete six-slot scene geometry for visual markers.
+    marker_layout = [dict(item) for item in layout]
+
     total_slots = len(layout)
     if args.scenario == "unknown":
         layout[-1] = dict(layout[-1], class_name=UNKNOWN, z=0.045)
@@ -219,9 +482,32 @@ def main():
         layout = layout[:-1]
     if args.remove_existing:
         for index in range(max(12, len(layout))):
-            remove_if_present(f"task_object_{index}", args.service_timeout_ms)
+            remove_if_present(
+                f"task_object_{index}",
+                args.service_timeout_ms,
+            )
+
+        # Visual-only marker cleanup.
+        for index in range(6):
+            remove_if_present(
+                f"initial_marker_{index}",
+                args.service_timeout_ms,
+            )
+            remove_if_present(
+                f"goal_marker_{index}",
+                args.service_timeout_ms,
+            )
     for item in layout:
         spawn(item, args.model_root)
+
+    # The normal six-object experiment displays exactly twelve floor frames:
+    # six source positions and six expected release positions.
+    #
+    # unknown / empty are exception-testing scenarios, so do not display
+    # misleading final classification targets there.
+    if args.scenario in {"nominal", "tennis_only"}:
+        spawn_scene_markers(marker_layout)
+
     write_ready_file(args.scene_ready_file)
 
     # Entity names remain neutral; the sorting node still obtains classes from YOLO.
