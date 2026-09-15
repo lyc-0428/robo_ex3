@@ -85,7 +85,7 @@ def generate_launch_description():
             description="nominal, unknown, or empty",
         ),
         DeclareLaunchArgument("bottle_confidence", default_value="0.40"),
-        DeclareLaunchArgument("tennis_confidence", default_value="0.50"),
+        DeclareLaunchArgument("tennis_confidence", default_value="0.40"),
 
         # Gazebo, robot_state_publisher, the camera sensor in the URDF, and the
         # simulated robot entity.

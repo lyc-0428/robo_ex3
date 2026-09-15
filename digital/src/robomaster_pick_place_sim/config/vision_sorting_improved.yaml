@@ -13,7 +13,7 @@ grasp_cube_action:
     alignment_min_speed: 0.30
     alignment_max_speed: 1.80
     alignment_smoothing: 0.35
-    aligned_required_frames: 4
+    aligned_required_frames: 1
     max_grasp_retries: 4
     total_slot_count: 6
     minimum_success_count: 5
@@ -51,7 +51,7 @@ grasp_cube_action:
     # In-place visual/classification turns can skid several centimetres.  Once
     # corridor reversal is within this radius, do not rotate around a tiny
     # lateral residual; restore only the required absolute yaw.
-    cycle_return_tolerance_m: 0.015
+    cycle_return_tolerance_m: 0.050
     # Tennis-only two-stage closure: joint_5 front pads curl first, then the
     # root joints close more slowly.  Reducing the offset makes the guard
     # shallower; zero restores the old rigid-finger geometry.

@@ -28,8 +28,11 @@ ALLOWED_TRANSITIONS = {
         SortingState.ALIGN, SortingState.DONE, SortingState.SAFE_STOP,
     },
     SortingState.ALIGN: {
-        SortingState.APPROACH, SortingState.RETURN_HOME,
-        SortingState.RECORD, SortingState.SAFE_STOP,
+        SortingState.ACQUIRE,
+        SortingState.APPROACH,
+        SortingState.RETURN_HOME,
+        SortingState.RECORD,
+        SortingState.SAFE_STOP,
     },
     SortingState.APPROACH: {
         SortingState.GRASP, SortingState.RETURN_HOME, SortingState.SAFE_STOP,

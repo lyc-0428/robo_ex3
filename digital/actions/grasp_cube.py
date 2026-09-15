@@ -526,35 +526,139 @@ class GraspCubeAction(Node):
         )
 
     def _wait_sim_duration(self, duration_seconds, callback=None):
+        """Wait in simulation time, with one automatic Gazebo resume attempt."""
         duration = float(duration_seconds)
+
         if duration <= 0.0:
             if callback is not None:
                 callback(1.0)
             return
 
-        start = self._wait_for_sim_time(after=self.latest_sim_time)
-        deadline = time.monotonic() + max(30.0, duration * 50.0)
+        # First require the simulation to actually advance.
+        # If it has unexpectedly paused, re-assert continuous running once
+        # instead of waiting until the whole action times out.
+        previous_time = self.latest_sim_time
+
+        try:
+            start = self._wait_for_sim_time(
+                after=previous_time,
+                timeout_seconds=2.0,
+            )
+        except GraspActionError:
+            self.get_logger().warning(
+                "SIM CLOCK STALLED BEFORE MOTION | "
+                "forcing Gazebo back to continuous mode"
+            )
+
+            self._publish_to(
+                self.wheel_publisher,
+                [0.0] * 4,
+                repeat=5,
+            )
+
+            self._set_world_paused(False)
+
+            start = self._wait_for_sim_time(
+                after=previous_time,
+                timeout_seconds=5.0,
+            )
+
+            self.get_logger().info(
+                "SIM CLOCK RECOVERED | motion may continue"
+            )
+
+        deadline = time.monotonic() + max(
+            30.0,
+            duration * 50.0,
+        )
+
         next_command_time = start
         command_period = 1.0 / self.command_rate_hz
+
+        last_progress_sim = start
+        last_progress_wall = time.monotonic()
+        resume_attempted = False
+
         if callback is not None:
             callback(0.0)
 
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=min(0.05, command_period))
+            rclpy.spin_once(
+                self,
+                timeout_sec=min(0.05, command_period),
+            )
+
             current = self.latest_sim_time
+
             if current is None:
                 continue
-            elapsed = max(0.0, current - start)
+
+            now = time.monotonic()
+
+            # Watch for simulation-time progress.
+            if current > last_progress_sim + 1.0e-9:
+                last_progress_sim = current
+                last_progress_wall = now
+
+            # Gazebo sometimes stops advancing while the ROS node itself
+            # remains alive.  Re-assert "run" once before declaring failure.
+            elif (
+                not resume_attempted
+                and now - last_progress_wall >= 2.0
+            ):
+                resume_attempted = True
+
+                self.get_logger().warning(
+                    "SIM CLOCK STALLED DURING MOTION | "
+                    "reasserting Gazebo continuous mode"
+                )
+
+                self._publish_to(
+                    self.wheel_publisher,
+                    [0.0] * 4,
+                    repeat=5,
+                )
+
+                try:
+                    self._set_world_paused(False)
+                    self.get_logger().info(
+                        "GAZEBO RESUME REQUEST SENT"
+                    )
+                except Exception as error:
+                    self.get_logger().warning(
+                        f"Gazebo resume attempt failed: {error}"
+                    )
+
+                last_progress_wall = now
+
+            elapsed = max(
+                0.0,
+                current - start,
+            )
+
             if elapsed >= duration:
                 if callback is not None:
                     callback(1.0)
                 return
-            if callback is not None and current >= next_command_time:
-                callback(elapsed / duration)
-                next_command_time = current + command_period
+
+            if (
+                callback is not None
+                and current >= next_command_time
+            ):
+                callback(
+                    min(
+                        1.0,
+                        elapsed / duration,
+                    )
+                )
+
+                next_command_time = (
+                    current + command_period
+                )
 
         if not rclpy.ok():
             raise KeyboardInterrupt
+
         raise GraspActionError(
             f"等待 {duration:.2f} 秒仿真时间超时，"
             "/joint_states 时间戳可能已经停止"

@@ -31,7 +31,11 @@ from vision_msgs.msg import (
 import torch
 from ultralytics import YOLO
 
-from color_confidence import adjusted_bottle_confidence
+from color_confidence import (
+    adjusted_bottle_confidence,
+    independent_hsv_bottle_candidates,
+    bbox_overlap_over_smaller,
+)
 from vision_common import BOTTLE, TENNIS, validate_model_names
 
 
@@ -102,10 +106,10 @@ class YoloBottleTennisDetector(Node):
         super().__init__("bottle_tennis_yolo_detector")
         self.declare_parameter("model_path", str(DEFAULT_MODEL))
         self.declare_parameter("bottle_confidence", 0.40)
-        self.declare_parameter("tennis_confidence", 0.50)
+        self.declare_parameter("tennis_confidence", 0.40)
         self.declare_parameter("candidate_confidence", 0.10)
-        self.declare_parameter("bottle_light_blue_bonus", 0.50)
-        self.declare_parameter("bottle_light_blue_min_fraction", 0.18)
+        self.declare_parameter("bottle_light_blue_bonus", 0.60)
+        self.declare_parameter("bottle_light_blue_min_fraction", 0.03)
         self.declare_parameter("image_size", 640)
         self.declare_parameter("device", "0")
         self.declare_parameter("detection_log_path", "")
@@ -245,21 +249,57 @@ class YoloBottleTennisDetector(Node):
                     x1, y1, x2, y2 = [float(value) for value in box]
                     bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
                     raw_score = float(score)
-                    adjusted_score = raw_score
-                    light_blue_fraction = 0.0
-                    color_bonus = 0.0
-                    if task_class == BOTTLE:
-                        (
-                            adjusted_score,
-                            light_blue_fraction,
-                            color_bonus,
-                        ) = adjusted_bottle_confidence(
-                            frame,
-                            bbox,
-                            raw_score,
-                            bonus=self.bottle_light_blue_bonus,
-                            minimum_fraction=self.bottle_light_blue_min_fraction,
+
+                    # Preserve what YOLO originally predicted.
+                    yolo_task_class = task_class
+
+                    # --------------------------------------------------
+                    # HSV-PRIMARY BOTTLE CLASSIFICATION
+                    #
+                    # Every candidate box is checked for bottle colour,
+                    # regardless of whether YOLO predicted bottle or tennis.
+                    # --------------------------------------------------
+                    (
+                        bottle_color_score,
+                        light_blue_fraction,
+                        color_bonus,
+                    ) = adjusted_bottle_confidence(
+                        frame,
+                        bbox,
+                        raw_score,
+                        bonus=self.bottle_light_blue_bonus,
+                        minimum_fraction=self.bottle_light_blue_min_fraction,
+                    )
+
+                    hsv_supports_bottle = (
+                        light_blue_fraction
+                        >= self.bottle_light_blue_min_fraction
+                    )
+
+                    color_promoted_to_bottle = False
+
+                    if hsv_supports_bottle:
+                        # Blue colour is strong evidence in this controlled
+                        # scene.  It may confirm a YOLO bottle or correct a
+                        # YOLO tennis false classification.
+                        task_class = BOTTLE
+                        adjusted_score = bottle_color_score
+
+                        color_promoted_to_bottle = (
+                            yolo_task_class != BOTTLE
                         )
+
+                    elif yolo_task_class == BOTTLE:
+                        # HARD GATE:
+                        # YOLO is not allowed to declare bottle when the
+                        # candidate contains insufficient bottle-blue HSV.
+                        continue
+
+                    else:
+                        # Non-blue tennis continues to rely on YOLO.
+                        task_class = yolo_task_class
+                        adjusted_score = raw_score
+
                     if adjusted_score < self.thresholds[task_class]:
                         continue
                     detections.append(
@@ -267,9 +307,12 @@ class YoloBottleTennisDetector(Node):
                             "class_id": class_id,
                             "class_name": task_class,
                             "raw_class_name": str(result.names[class_id]),
+                            "yolo_task_class": yolo_task_class,
                             "raw_confidence": round(raw_score, 4),
                             "light_blue_fraction": round(light_blue_fraction, 4),
                             "color_bonus": round(color_bonus, 4),
+                            "hsv_supports_bottle": hsv_supports_bottle,
+                            "color_promoted_to_bottle": color_promoted_to_bottle,
                             "confidence": round(adjusted_score, 4),
                             "bbox": {
                                 "x1": round(x1, 1),
@@ -279,6 +322,181 @@ class YoloBottleTennisDetector(Node):
                             },
                         }
                     )
+            # ====================================================
+            # HSV INDEPENDENT BOTTLE DETECTOR
+            #
+            # This does NOT require a YOLO bbox.  It scans the complete
+            # camera image for transparent light-blue bottle regions and
+            # creates bottle detections directly.
+            # ====================================================
+            hsv_candidates = independent_hsv_bottle_candidates(
+                frame
+            )
+
+            for hsv_index, hsv_candidate in enumerate(
+                hsv_candidates
+            ):
+                hsv_bbox = hsv_candidate["bbox"]
+
+                # First try to associate the colour region with an existing
+                # YOLO detection.  Because the HSV box normally covers only
+                # the coloured bottle body while YOLO covers the whole object,
+                # use intersection / smaller-box-area rather than normal IoU.
+                best_match = None
+                best_overlap = 0.0
+
+                for existing in detections:
+                    overlap = bbox_overlap_over_smaller(
+                        hsv_bbox,
+                        existing["bbox"],
+                    )
+
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_match = existing
+
+                if (
+                    best_match is not None
+                    and best_overlap >= 0.35
+                ):
+                    # Independent colour evidence can correct YOLO.
+                    #
+                    # Example:
+                    # YOLO says tennis 0.31,
+                    # HSV says light-blue bottle,
+                    # final class becomes bottle.
+                    raw = float(
+                        best_match.get(
+                            "raw_confidence",
+                            best_match.get(
+                                "confidence",
+                                0.0,
+                            ),
+                        )
+                    )
+
+                    previous_class = best_match[
+                        "class_name"
+                    ]
+
+                    best_match[
+                        "yolo_task_class"
+                    ] = previous_class
+
+                    best_match[
+                        "class_name"
+                    ] = BOTTLE
+
+                    best_match[
+                        "confidence"
+                    ] = round(
+                        min(
+                            1.0,
+                            raw
+                            + self.bottle_light_blue_bonus,
+                        ),
+                        4,
+                    )
+
+                    best_match[
+                        "color_bonus"
+                    ] = round(
+                        self.bottle_light_blue_bonus,
+                        4,
+                    )
+
+                    best_match[
+                        "hsv_independent"
+                    ] = True
+
+                    best_match[
+                        "hsv_overlap"
+                    ] = round(
+                        best_overlap,
+                        4,
+                    )
+
+                    best_match[
+                        "hsv_fill_fraction"
+                    ] = round(
+                        float(
+                            hsv_candidate[
+                                "fill_fraction"
+                            ]
+                        ),
+                        4,
+                    )
+
+                    continue
+
+                # No YOLO object overlaps this HSV region.
+                #
+                # This is the important new path:
+                # HSV itself creates a bottle detection.
+                hsv_confidence = max(
+                    self.thresholds[BOTTLE],
+                    0.60,
+                )
+
+                detections.append(
+                    {
+                        "class_id": -1,
+                        "class_name": BOTTLE,
+                        "raw_class_name": "hsv_only",
+                        "yolo_task_class": None,
+                        "raw_confidence": 0.0,
+                        "light_blue_fraction": round(
+                            float(
+                                hsv_candidate[
+                                    "fill_fraction"
+                                ]
+                            ),
+                            4,
+                        ),
+                        "color_bonus": 0.60,
+                        "hsv_independent": True,
+                        "hsv_overlap": 0.0,
+                        "hsv_fill_fraction": round(
+                            float(
+                                hsv_candidate[
+                                    "fill_fraction"
+                                ]
+                            ),
+                            4,
+                        ),
+                        "confidence": round(
+                            hsv_confidence,
+                            4,
+                        ),
+                        "bbox": {
+                            "x1": round(
+                                float(
+                                    hsv_bbox["x1"]
+                                ),
+                                1,
+                            ),
+                            "y1": round(
+                                float(
+                                    hsv_bbox["y1"]
+                                ),
+                                1,
+                            ),
+                            "x2": round(
+                                float(
+                                    hsv_bbox["x2"]
+                                ),
+                                1,
+                            ),
+                            "y2": round(
+                                float(
+                                    hsv_bbox["y2"]
+                                ),
+                                1,
+                            ),
+                        },
+                    }
+                )
+
             elapsed = time.perf_counter() - start
             current_fps = 1.0 / elapsed if elapsed > 0.0 else 0.0
             self.smoothed_fps = (

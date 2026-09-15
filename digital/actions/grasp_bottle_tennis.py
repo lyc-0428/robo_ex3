@@ -85,7 +85,7 @@ class GraspBottleTennisAction(GraspCubeAction):
         self.declare_parameter("alignment_min_speed", 0.4)
         self.declare_parameter("alignment_max_speed", 3.0)
         self.declare_parameter("alignment_smoothing", 0.35)
-        self.declare_parameter("aligned_required_frames", 3)
+        self.declare_parameter("aligned_required_frames", 1)
         self.declare_parameter("max_grasp_retries", 2)
         self.declare_parameter("controller_ready_file", "")
         self.declare_parameter("scene_ready_file", "")
@@ -106,7 +106,7 @@ class GraspBottleTennisAction(GraspCubeAction):
         self.declare_parameter("grasp_approach_arrival_tolerance_m", 0.012)
         self.declare_parameter("grasp_lift_minimum_m", 0.012)
         self.declare_parameter("grasp_lift_verification_timeout_seconds", 1.50)
-        self.declare_parameter("cycle_return_tolerance_m", 0.015)
+        self.declare_parameter("cycle_return_tolerance_m", 0.050)
         # Curl the two front pads before moving the gripper roots.  This makes
         # a shallow retaining lip in front of a round ball, then closes the
         # main jaws slowly so the ball cannot be squeezed straight forward.
@@ -473,38 +473,133 @@ class GraspBottleTennisAction(GraspCubeAction):
             "check CAMERA FRAME READY and YOLO inference errors"
         )
 
-    def _wait_stable_detection(self, preferred_class=None):
+    @staticmethod
+    def _is_hsv_only_detection(detection):
+        """Return True only for a bbox created entirely by HSV.
+
+        HSV may promote an existing YOLO bbox to bottle.  Such a bbox is
+        still geometrically useful because its coordinates came from YOLO.
+        Only raw_class_name == hsv_only (or class_id == -1) is forbidden
+        from final pixel-level alignment.
+        """
+        if detection is None:
+            return False
+
+        if str(detection.get("raw_class_name", "")) == "hsv_only":
+            return True
+
+        try:
+            return int(detection.get("class_id", -999)) == -1
+        except (TypeError, ValueError):
+            return False
+
+    def _wait_stable_detection(
+        self,
+        preferred_class=None,
+        require_yolo=False,
+        timeout_seconds=None,
+    ):
+        """Wait for a stable detection.
+
+        require_yolo=False:
+            ACQUIRE may use YOLO or independent HSV.
+
+        require_yolo=True:
+            pure HSV-only boxes are removed.  This mode is used only for
+            final camera-centre refinement, where bbox geometry must come
+            from YOLO rather than the transparent bottle colour contour.
+        """
+
         self.detection_frames.clear()
-        deadline = time.monotonic() + self.detection_timeout
+
+        timeout = (
+            self.detection_timeout
+            if timeout_seconds is None
+            else float(timeout_seconds)
+        )
+
+        deadline = time.monotonic() + timeout
+
         while rclpy.ok() and time.monotonic() < deadline:
-            rclpy.spin_once(self, timeout_sec=0.10)
+            rclpy.spin_once(
+                self,
+                timeout_sec=0.10,
+            )
+
+            frames = list(
+                self.detection_frames
+            )
+
+            if require_yolo:
+                frames = [
+                    [
+                        item
+                        for item in frame
+                        if not self._is_hsv_only_detection(
+                            item
+                        )
+                    ]
+                    for frame in frames
+                ]
+
             detection = stable_center_detection(
-                list(self.detection_frames),
+                frames,
                 self.camera_principal_x,
                 required_votes=self.stable_required_frames,
                 preferred_class=preferred_class,
                 max_center_spread_px=self.stable_center_spread_px,
                 selection="leftmost",
             )
+
             if detection is not None:
+
+                source = (
+                    "HSV_ONLY"
+                    if self._is_hsv_only_detection(
+                        detection
+                    )
+                    else "YOLO"
+                )
+
                 self._publish_status(
                     "VISION LOCK | "
                     f"id={detection.get('object_id', 'unassociated')} | "
                     f"class={detection['class_name']} | "
+                    f"source={source} | "
                     f"confidence={detection['confidence']:.3f} | "
-                    f"stable={detection['stable_votes']}/{self.stable_window_frames} | "
+                    f"stable={detection['stable_votes']}/"
+                    f"{self.stable_window_frames} | "
                     "tracking=leftmost"
                 )
+
                 return detection
-        class_text = preferred_class or "bottle/tennis"
+
+        class_text = (
+            preferred_class
+            or "bottle/tennis"
+        )
+
+        source_text = (
+            " YOLO"
+            if require_yolo
+            else ""
+        )
+
         raise RetryableAcquisitionError(
-            f"no stable {class_text} detection within {self.detection_timeout:.1f} s"
+            f"no stable{source_text} {class_text} detection "
+            f"within {timeout:.1f} s"
         )
 
     def _align_to_visual_target(self, held_positions):
         """Continuously rotate the chassis while visually centering the target."""
         detection = self._wait_stable_detection()
         target_class = detection["class_name"]
+
+        # HSV-only is permitted for discovery / identity association,
+        # but never for final pixel-level grasp alignment.
+        initial_hsv_only = self._is_hsv_only_detection(
+            detection
+        )
         self._locked_object_id = detection['object_id']
         if self._locked_object_origin is None:
             self._locked_object_origin = self._identity.position(self._locked_object_id)
@@ -532,6 +627,13 @@ class GraspBottleTennisAction(GraspCubeAction):
             )
             bearing_error = wrap_angle(coarse_target_yaw - yaw)
             initial_target_angle = abs(bearing_error)
+
+        if initial_hsv_only and coarse_target_yaw is None:
+            raise RetryableAcquisitionError(
+                "HSV-only bottle was detected, but its associated "
+                "Gazebo object has no usable world pose; refusing "
+                "to use HSV contour geometry for grasp alignment"
+            )
 
         self._publish_status(
             "TARGET GEOMETRY LOCKED | "
@@ -565,9 +667,55 @@ class GraspBottleTennisAction(GraspCubeAction):
             )
             # Discard pre-turn boxes and establish a new stable observation at
             # the coarse heading before applying pixel-level corrections.
-            detection = self._wait_stable_detection(
-                preferred_class=target_class
-            )
+            if (
+                target_class == BOTTLE
+                and initial_hsv_only
+            ):
+                try:
+                    detection = self._wait_stable_detection(
+                        preferred_class=BOTTLE,
+                        require_yolo=True,
+                        timeout_seconds=min(
+                            4.0,
+                            self.detection_timeout,
+                        ),
+                    )
+
+                    self._publish_status(
+                        "HSV->YOLO HANDOFF SUCCESS | "
+                        f"id={self._locked_object_id} | "
+                        "YOLO bbox will perform final pixel alignment"
+                    )
+
+                except RetryableAcquisitionError:
+
+                    current_pose = (
+                        self._identity.pose2d()
+                    )
+
+                    if current_pose is None:
+                        raise RetryableAcquisitionError(
+                            "HSV bottle was world-aligned but "
+                            "chassis pose feedback was lost"
+                        )
+
+                    self._aligned_yaw = (
+                        current_pose.yaw
+                    )
+
+                    self._publish_status(
+                        "HSV->YOLO HANDOFF UNAVAILABLE | "
+                        f"id={self._locked_object_id} | "
+                        "HSV bbox is NOT used for final alignment | "
+                        "continue with locked Gazebo world pose"
+                    )
+
+                    return target_class
+
+            else:
+                detection = self._wait_stable_detection(
+                    preferred_class=target_class
+                )
 
         def center_x(item):
             box = item["bbox"]
@@ -618,9 +766,26 @@ class GraspBottleTennisAction(GraspCubeAction):
                 candidates = [
                     item
                     for item in latest
-                    if canonical_class(item.get("class_name", ""))
+                    if canonical_class(
+                        item.get(
+                            "class_name",
+                            "",
+                        )
+                    )
                     == target_class
                 ]
+
+                # HSV-only boxes are useful for finding / classifying
+                # bottles, but their contour centres are not trusted for
+                # the final +/- pixel alignment used before grasping.
+                if target_class == BOTTLE:
+                    candidates = [
+                        item
+                        for item in candidates
+                        if not self._is_hsv_only_detection(
+                            item
+                        )
+                    ]
 
                 # If detection is temporarily lost, smoothly slow down.
                 if not candidates:
@@ -749,6 +914,26 @@ class GraspBottleTennisAction(GraspCubeAction):
                     "VISUAL ALIGNMENT WORLD POSE | "
                     f"yaw_delta_deg={math.degrees(yaw_delta):.2f}"
                 )
+
+        if (
+            target_class == BOTTLE
+            and self._locked_object_id is not None
+        ):
+            current_pose = self._identity.pose2d()
+
+            if current_pose is not None:
+                self._aligned_yaw = (
+                    current_pose.yaw
+                )
+
+                self._publish_status(
+                    "YOLO FINAL ALIGN UNAVAILABLE | "
+                    f"id={self._locked_object_id} | "
+                    "reject HSV contour steering | "
+                    "continue with associated Gazebo world position"
+                )
+
+                return target_class
 
         raise RetryableAcquisitionError(
             f"unable to continuously center {target_class} "
@@ -1101,6 +1286,133 @@ class GraspBottleTennisAction(GraspCubeAction):
         )
         self._approach_return_pending = False
 
+    def _return_to_cycle_center_staged(
+        self,
+        held_positions,
+        target,
+        label_prefix,
+    ):
+        """Return to cycle x/y without continuously chasing endpoint bearing.
+
+        The ordinary position controller recomputes the target bearing every
+        frame.  Near the origin, skid-steer pivot drift changes that bearing
+        faster than the loaded chassis can settle, producing a spiral.
+
+        Here every correction pass is finite:
+            fixed yaw -> fixed straight motion -> measure again.
+
+        At most three correction passes are allowed, so this routine can never
+        spin indefinitely.
+        """
+
+        max_passes = 3
+
+        for pass_index in range(1, max_passes + 1):
+
+            current = self._identity.pose2d()
+
+            if current is None:
+                raise GraspActionError(
+                    f"{label_prefix}: chassis pose unavailable"
+                )
+
+            dx = target.x - current.x
+            dy = target.y - current.y
+            distance = math.hypot(dx, dy)
+
+            if distance <= self.cycle_return_tolerance:
+                self._publish_status(
+                    f"{label_prefix} CENTER REACHED | "
+                    f"pass={pass_index - 1} | "
+                    f"error={distance:.4f} m"
+                )
+                return current
+
+            # World direction from current measured position to the fixed
+            # cycle center.
+            bearing = math.atan2(dy, dx)
+
+            # Choose forward or reverse according to whichever requires
+            # less chassis rotation.
+            forward_heading = bearing
+            reverse_heading = wrap_angle(
+                bearing + math.pi
+            )
+
+            forward_error = abs(
+                wrap_angle(
+                    forward_heading - current.yaw
+                )
+            )
+
+            reverse_error = abs(
+                wrap_angle(
+                    reverse_heading - current.yaw
+                )
+            )
+
+            if reverse_error < forward_error:
+                travel_yaw = reverse_heading
+                travel_mode = "reverse"
+            else:
+                travel_yaw = forward_heading
+                travel_mode = "forward"
+
+            self._publish_status(
+                f"{label_prefix} STAGED RETURN | "
+                f"pass={pass_index}/{max_passes} | "
+                f"distance={distance:.4f} m | "
+                f"travel={travel_mode} | "
+                f"heading={math.degrees(travel_yaw):.2f} deg"
+            )
+
+            # Phase A: one explicit pivot.
+            self._drive_to_pose(
+                held_positions,
+                Pose2D(
+                    current.x,
+                    current.y,
+                    travel_yaw,
+                ),
+                f"{label_prefix} PASS {pass_index} FIXED TURN",
+                control_mode="yaw",
+            )
+
+            # Phase B: freeze that heading and translate.
+            #
+            # compute_straight never recomputes atan2(target-current)
+            # every frame, so endpoint noise cannot create an orbit.
+            self._drive_to_pose(
+                held_positions,
+                target,
+                f"{label_prefix} PASS {pass_index} FIXED STRAIGHT",
+                control_mode="straight",
+                travel_yaw=travel_yaw,
+                arrival_tolerance=self.cycle_return_tolerance,
+            )
+
+        # Finite failure instead of an infinite spiral.
+        current = self._identity.pose2d()
+
+        if current is None:
+            raise GraspActionError(
+                f"{label_prefix}: pose lost after staged return"
+            )
+
+        final_error = math.hypot(
+            target.x - current.x,
+            target.y - current.y,
+        )
+
+        if final_error > self.cycle_return_tolerance:
+            raise GraspActionError(
+                f"{label_prefix}: staged cycle-center return "
+                f"did not converge after {max_passes} passes; "
+                f"error={final_error:.4f} m"
+            )
+
+        return current
+
     def _rotate_chassis(self, held_positions):
         self._placement_ready = False
         self._placement_departure_pose = None
@@ -1290,6 +1602,49 @@ class GraspBottleTennisAction(GraspCubeAction):
             control_mode="yaw",
         )
 
+    def _restore_pre_grasp_heading(self, held_positions):
+        """Before a verified grasp, stop and restore yaw only.
+
+        Visual-alignment or approach retries must not invoke the full
+        return-home position controller.  The chassis keeps its current x/y
+        and only pivots back to the fixed sorting-home heading before the next
+        acquisition.
+        """
+        if self._sorting_home_pose is None:
+            raise GraspActionError(
+                "pre-grasp heading recovery requested without sorting home pose"
+            )
+
+        current = self._identity.pose2d()
+        if current is None:
+            raise GraspActionError(
+                "pre-grasp heading recovery lost chassis pose feedback"
+            )
+
+        self._publish_status(
+            "PRE-GRASP RETRY RECOVERY | stop wheels; restore home yaw only; "
+            "x/y return disabled until grasp is verified"
+        )
+
+        self._publish_to(
+            self.wheel_publisher,
+            [0.0] * 4,
+            repeat=10,
+        )
+
+        target = Pose2D(
+            current.x,
+            current.y,
+            self._sorting_home_pose.yaw,
+        )
+
+        self._drive_to_pose(
+            held_positions,
+            target,
+            "PRE-GRASP RESTORE HOME YAW ONLY",
+            control_mode="yaw",
+        )
+
     def _restore_cycle_offsets(self, held_positions):
         if self.task_state.state != SortingState.SAFE_STOP:
             self.task_state.transition(SortingState.RETURN_HOME)
@@ -1333,13 +1688,26 @@ class GraspBottleTennisAction(GraspCubeAction):
             # Yaw-only skid steering may translate the chassis.  Close the
             # loop on x, y and yaw together before permitting another image
             # acquisition, so every cycle uses the same world-frame origin.
-            self._drive_to_pose(
-                held_positions,
-                self._cycle_pose,
-                "FINAL FIXED HOME POSE VERIFICATION",
-                allow_reverse=True,
-                control_mode="pose",
-            )
+            # Position and yaw were already verified separately.
+            # Accept the relaxed home region instead of chasing exact (0, 0, 0).
+            current_pose = self._identity.pose2d()
+            if current_pose is not None:
+                home_error = math.hypot(
+                    self._cycle_pose.x - current_pose.x,
+                    self._cycle_pose.y - current_pose.y,
+                )
+                yaw_error = abs(
+                    wrap_angle(
+                        self._cycle_pose.yaw - current_pose.yaw
+                    )
+                )
+                self._publish_status(
+                    "RELAXED HOME ACCEPTED | "
+                    f"position_error={home_error:.4f} m | "
+                    f"yaw_error={math.degrees(yaw_error):.2f} deg | "
+                    f"position_tolerance={self.cycle_return_tolerance:.3f} m"
+                )
+
         finally:
             self._cycle_pose = None
             self._placement_departure_pose = None
@@ -1447,7 +1815,7 @@ class GraspBottleTennisAction(GraspCubeAction):
                             f"reason={error} | action=return_fixed_home_reacquire | "
                             "processed_count_unchanged=true"
                         )
-                        self._restore_cycle_offsets(current)
+                        self._restore_pre_grasp_heading(current)
                         self._locked_object_id = None
                         self._locked_object_origin = None
                         self._current_class = None
@@ -1487,7 +1855,7 @@ class GraspBottleTennisAction(GraspCubeAction):
                             f"reason={error} | action=return_fixed_home_reacquire | "
                             "processed_count_unchanged=true"
                         )
-                        self._restore_cycle_offsets(current)
+                        self._restore_pre_grasp_heading(current)
                         self._locked_object_id = None
                         self._locked_object_origin = None
                         self._current_class = None
