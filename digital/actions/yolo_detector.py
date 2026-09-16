@@ -14,13 +14,24 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import Image
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
+from vision_msgs.msg import (
+    Detection2D,
+    Detection2DArray,
+    ObjectHypothesisWithPose,
+)
 import torch
 from ultralytics import YOLO
 
+from color_confidence import adjusted_bottle_confidence
 from vision_common import BOTTLE, TENNIS, validate_model_names
 
 
@@ -92,8 +103,12 @@ class YoloBottleTennisDetector(Node):
         self.declare_parameter("model_path", str(DEFAULT_MODEL))
         self.declare_parameter("bottle_confidence", 0.40)
         self.declare_parameter("tennis_confidence", 0.50)
+        self.declare_parameter("candidate_confidence", 0.10)
+        self.declare_parameter("bottle_light_blue_bonus", 0.50)
+        self.declare_parameter("bottle_light_blue_min_fraction", 0.18)
         self.declare_parameter("image_size", 640)
         self.declare_parameter("device", "0")
+        self.declare_parameter("detection_log_path", "")
 
         self.model_path = Path(
             str(self.get_parameter("model_path").value)
@@ -104,6 +119,33 @@ class YoloBottleTennisDetector(Node):
         }
         self.image_size = int(self.get_parameter("image_size").value)
         self.device = str(self.get_parameter("device").value)
+        self.candidate_confidence = float(
+            self.get_parameter("candidate_confidence").value
+        )
+        self.bottle_light_blue_bonus = float(
+            self.get_parameter("bottle_light_blue_bonus").value
+        )
+        self.bottle_light_blue_min_fraction = float(
+            self.get_parameter("bottle_light_blue_min_fraction").value
+        )
+        if not 0.0 < self.candidate_confidence <= min(self.thresholds.values()):
+            raise ValueError(
+                "candidate_confidence must be positive and no greater than class thresholds"
+            )
+        if self.bottle_light_blue_bonus < 0.0 or not (
+            0.0 <= self.bottle_light_blue_min_fraction <= 1.0
+        ):
+            raise ValueError("invalid light-blue bottle confidence settings")
+        detection_log_path = str(
+            self.get_parameter("detection_log_path").value
+        ).strip()
+        self._detection_log = None
+        if detection_log_path:
+            log_path = Path(detection_log_path).expanduser()
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._detection_log = log_path.open(
+                "a", encoding="utf-8", buffering=1
+            )
         if not self.model_path.is_file():
             raise RuntimeError(f"YOLO weight not found: {self.model_path}")
         if self.device != "cpu" and not torch.cuda.is_available():
@@ -126,19 +168,47 @@ class YoloBottleTennisDetector(Node):
         self.create_subscription(
             Image, "/camera/image_raw", self.image_callback, camera_qos
         )
+        self._detection_enabled = False
+        control_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.create_subscription(
+            Bool,
+            "/vision_sorting/enable_detection",
+            self.enable_callback,
+            control_qos,
+        )
         self.image_publisher = self.create_publisher(
             Image, "/detections/image", 10
         )
         self.detection_publisher = self.create_publisher(
             String, "/detections", 10
         )
+        self.structured_detection_publisher = self.create_publisher(
+            Detection2DArray, "/detections_2d", 10
+        )
         self.frame_count = 0
         self.smoothed_fps = 0.0
         self._reported_first_frame = False
         self._consecutive_failures = 0
-        self.get_logger().info("YOLO detector ready: /camera/image_raw -> /detections")
+        self.get_logger().info(
+            "YOLO detector ready in paused state; awaiting acquire/align phase"
+        )
+
+    def enable_callback(self, message):
+        enabled = bool(message.data)
+        if enabled == self._detection_enabled:
+            return
+        self._detection_enabled = enabled
+        self.get_logger().info(
+            f"YOLO {'ENABLED' if enabled else 'PAUSED'} BY SORTING STATE"
+        )
 
     def image_callback(self, message):
+        if not self._detection_enabled:
+            return
         start = time.perf_counter()
         try:
             frame = image_message_to_bgr(message)
@@ -153,7 +223,9 @@ class YoloBottleTennisDetector(Node):
             result = self.model.predict(
                 source=frame,
                 imgsz=self.image_size,
-                conf=min(self.thresholds.values()),
+                # Keep low-score candidates long enough for the independent
+                # pale-blue ROI evidence to rescue a bottle prediction.
+                conf=self.candidate_confidence,
                 device=self.device,
                 verbose=False,
             )[0]
@@ -168,15 +240,37 @@ class YoloBottleTennisDetector(Node):
                 ):
                     class_id = int(class_number)
                     task_class = self.class_mapping.get(class_id)
-                    if task_class is None or float(score) < self.thresholds[task_class]:
+                    if task_class is None:
                         continue
                     x1, y1, x2, y2 = [float(value) for value in box]
+                    bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                    raw_score = float(score)
+                    adjusted_score = raw_score
+                    light_blue_fraction = 0.0
+                    color_bonus = 0.0
+                    if task_class == BOTTLE:
+                        (
+                            adjusted_score,
+                            light_blue_fraction,
+                            color_bonus,
+                        ) = adjusted_bottle_confidence(
+                            frame,
+                            bbox,
+                            raw_score,
+                            bonus=self.bottle_light_blue_bonus,
+                            minimum_fraction=self.bottle_light_blue_min_fraction,
+                        )
+                    if adjusted_score < self.thresholds[task_class]:
+                        continue
                     detections.append(
                         {
                             "class_id": class_id,
                             "class_name": task_class,
                             "raw_class_name": str(result.names[class_id]),
-                            "confidence": round(float(score), 4),
+                            "raw_confidence": round(raw_score, 4),
+                            "light_blue_fraction": round(light_blue_fraction, 4),
+                            "color_bonus": round(color_bonus, 4),
+                            "confidence": round(adjusted_score, 4),
                             "bbox": {
                                 "x1": round(x1, 1),
                                 "y1": round(y1, 1),
@@ -232,6 +326,28 @@ class YoloBottleTennisDetector(Node):
                 ensure_ascii=False,
             )
             self.detection_publisher.publish(output)
+            if self._detection_log is not None:
+                self._detection_log.write(output.data + "\n")
+            structured = Detection2DArray()
+            structured.header = message.header
+            for item in detections:
+                box = item["bbox"]
+                detection_2d = Detection2D()
+                detection_2d.header = message.header
+                detection_2d.bbox.center.position.x = (
+                    float(box["x1"]) + float(box["x2"])
+                ) * 0.5
+                detection_2d.bbox.center.position.y = (
+                    float(box["y1"]) + float(box["y2"])
+                ) * 0.5
+                detection_2d.bbox.size_x = float(box["x2"]) - float(box["x1"])
+                detection_2d.bbox.size_y = float(box["y2"]) - float(box["y1"])
+                hypothesis = ObjectHypothesisWithPose()
+                hypothesis.hypothesis.class_id = item["class_name"]
+                hypothesis.hypothesis.score = float(item["confidence"])
+                detection_2d.results.append(hypothesis)
+                structured.detections.append(detection_2d)
+            self.structured_detection_publisher.publish(structured)
             image = bgr_to_image_message(annotated, message.header)
             self.image_publisher.publish(image)
             self.frame_count += 1
@@ -248,6 +364,11 @@ class YoloBottleTennisDetector(Node):
                     f"{type(error).__name__}: {error!r}"
                 ) from error
 
+    def close_detection_log(self):
+        if self._detection_log is not None:
+            self._detection_log.close()
+            self._detection_log = None
+
 
 def main(args=None):
     signal.signal(signal.SIGINT, request_stop)
@@ -262,6 +383,7 @@ def main(args=None):
         pass
     finally:
         if node is not None:
+            node.close_detection_log()
             node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

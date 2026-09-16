@@ -1,0 +1,104 @@
+grasp_cube_action:
+  ros__parameters:
+    use_sim_time: true
+    log_dir: /home/adam/Team21/yjh/robo_ex3/logs
+
+    # Vision stability and safe retry policy.
+    detection_timeout_seconds: 18.0
+    stable_window_frames: 5
+    stable_required_frames: 4
+    stable_center_spread_px: 35.0
+    alignment_tolerance_px: 12.0
+    alignment_kp: 0.02
+    alignment_min_speed: 0.30
+    alignment_max_speed: 1.80
+    alignment_smoothing: 0.35
+    aligned_required_frames: 4
+    max_grasp_retries: 2
+    total_slot_count: 6
+    minimum_success_count: 6
+    class_limit_per_category: 3
+
+    # Closed-loop chassis controller.  Completion requires four consecutive
+    # measured poses inside both tolerances.
+    pose_motion_timeout_seconds: 60.0
+    pose_control_rate_hz: 40.0
+    position_tolerance_m: 0.010
+    # Keep final-yaw control latched through small wheel-slip excursions; the
+    # strict 1 cm tolerance is still required before POSE REACHED.
+    position_reacquire_tolerance_m: 0.025
+    yaw_tolerance_degrees: 1.0
+    pose_stable_samples: 4
+    pose_linear_kp: 8.0
+    pose_angular_kp: 4.0
+    pose_max_linear_wheel_speed: 2.0
+    pose_max_angular_wheel_speed: 1.8
+
+    # Objects start at radius 0.47 m.  The base advances until the measured
+    # object distance matches the calibrated arm standoff.
+    bottle_grasp_standoff_m: 0.350
+    tennis_grasp_standoff_m: 0.300
+    # Once YOLO has centred the target, lock the measured world heading and
+    # drive only along that straight corridor.
+    grasp_approach_arrival_tolerance_m: 0.012
+    # A grasp succeeds only when the locked Gazebo entity rises with the test
+    # lift; a miss returns to the cycle origin and starts fresh acquisition.
+    grasp_lift_minimum_m: 0.012
+    grasp_lift_verification_timeout_seconds: 1.50
+    # In-place visual/classification turns can skid several centimetres.  Once
+    # corridor reversal is within this radius, do not rotate around a tiny
+    # lateral residual; restore only the required absolute yaw.
+    cycle_return_tolerance_m: 0.050
+    # Tennis-only two-stage closure: joint_5 front pads curl first, then the
+    # root joints close more slowly.  Reducing the offset makes the guard
+    # shallower; zero restores the old rigid-finger geometry.
+    tennis_tip_preclose_offset_rad: 0.28
+    tennis_tip_preclose_duration_seconds: 0.90
+    tennis_tip_guard_pause_seconds: 0.35
+    tennis_root_close_duration_seconds: 3.20
+    placement_yaw_degrees: 90.0
+    # Restored tennis placement-debug snapshot: six successful rounds use
+    # 0.65, 0.58, 0.51, 0.44, 0.37, 0.30 m. Failed retries do not consume a
+    # new distance.
+    placement_distance_m: 0.650
+    placement_distance_decrement_m: 0.070
+    placement_minimum_distance_m: 0.300
+    # Exact drop coordinates are unnecessary: stop within 5 cm along the
+    # fixed corridor. A result counts when it lies at least 20 cm into its
+    # class half (tennis left, bottle right) relative to the cycle origin.
+    placement_arrival_tolerance_m: 0.050
+    classification_zone_margin_m: 0.200
+
+    # Base-class grasp motion.  These retain the team's existing arm tuning.
+    speed_scale: 4.0
+    command_rate_hz: 100.0
+    motion_duration_seconds: 1.0
+    gripper_duration_seconds: 1.3
+    settle_duration_seconds: 0.35
+    gripper_settle_seconds: 0.75
+    cycle_pause_seconds: 0.5
+    open_offset: 0.70
+    close_offset: 0.00
+    arm_extend_delta: 1.38
+    arm_initial_fraction: 0.45
+    arm_alignment_fraction: 0.58
+    arm_coarse_fraction: 0.92
+    arm_test_lift_delta: 1.22
+    arm_lift_delta: 0.95
+    arm_2_delta: -1.38
+    wheel_speed: 3.0
+    post_turn_settle_seconds: 0.30
+    stop_on_empty_grasp: true
+    grasp_position_tolerance: 0.02
+    controller_timeout_seconds: 20.0
+    scene_ready_timeout_seconds: 90.0
+    # New lateral workflow; seconds are wall time unless stated otherwise.
+    linear_scan_speed_mps: 0.050
+    linear_transport_speed_mps: 0.60
+    linear_empty_return_speed_mps: 0.90
+    linear_acceleration_mps2: 1.00
+    linear_move_timeout_seconds: 600.0
+    linear_watch_seconds: 3.0
+    linear_position_tolerance_m: 0.010
+    # 0 repeats both directions until all six releases have been verified.
+    linear_max_passes: 0

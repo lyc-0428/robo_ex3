@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Vision-guided four-object sorting with the two calibrated EP1 grasps."""
+"""Vision-guided six-object sorting with measured-pose chassis feedback."""
 
 from __future__ import annotations
 
@@ -11,40 +11,68 @@ import shutil
 import time
 
 import rclpy
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from rclpy.signals import SignalHandlerOptions
 from sensor_msgs.msg import CameraInfo
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 from sorting_identity import SortingIdentity
+from pose_feedback import (
+    Pose2D,
+    PoseController,
+    PoseControllerConfig,
+    wrap_angle,
+)
+from task_state_machine import SortingState, SortingStateMachine
+from placement_zone import (
+    in_classification_half,
+    lateral_offset,
+    placement_distance_for_attempt,
+)
+from gripper_staging import (
+    is_tip_first_closing,
+    tennis_closed_pose,
+    tennis_open_pose,
+    tip_first_pose,
+)
 
 from grasp_cube import GraspActionError, GraspCubeAction, POSITION_JOINTS
 from vision_common import (
     BOTTLE,
     TENNIS,
-    angle_to_steps,
     canonical_class,
     horizontal_angle_radians,
-    placement_step,
     stable_center_detection,
 )
 
 
+class MissedGraspError(GraspActionError):
+    """The locked object did not rise with the gripper."""
+
+
+class RetryableAcquisitionError(GraspActionError):
+    """Vision or approach geometry requires a return-home reacquisition."""
+
+
 class GraspBottleTennisAction(GraspCubeAction):
-    """Sort four objects using camera classification, never spawn metadata."""
+    """Sort six objects using camera classes and measured chassis pose."""
 
     def __init__(self):
         super().__init__()
-        self.run_count = 4
+        self.run_count = 6
         self.spawn_test_cube = False
+        self.expected_counts = {BOTTLE: 3, TENNIS: 3}
 
         # Preserve the two user-calibrated grasp modes.
         self.bottle_arm_2_delta = self.arm_2_delta
         self.tennis_arm_2_delta = -0.78
         self._use_tennis_grasp = False
-        self.turn_steps = 2500
 
-        # The outer ±30-degree slots need about 11-12 seconds at the current
-        # filtered YOLO frame rate and smooth wheel acceleration.
+        # The outer slots need a longer detector window on the Jetson.
         self.declare_parameter("detection_timeout_seconds", 15.0)
         self.declare_parameter("stable_window_frames", 5)
         self.declare_parameter("stable_required_frames", 4)
@@ -53,21 +81,49 @@ class GraspBottleTennisAction(GraspCubeAction):
         # Jetson live calibration: use half the original angular gain.  The
         # camera image moves opposite to the chassis yaw command, so visual
         # corrections invert the geometric image angle below.
-        self.declare_parameter("alignment_steps_per_radian", 1000.0)
-        self.declare_parameter("max_alignment_corrections", 8)
         self.declare_parameter("alignment_kp", 0.02)
         self.declare_parameter("alignment_min_speed", 0.4)
         self.declare_parameter("alignment_max_speed", 3.0)
         self.declare_parameter("alignment_smoothing", 0.35)
         self.declare_parameter("aligned_required_frames", 3)
         self.declare_parameter("max_grasp_retries", 2)
-        self.declare_parameter("minimum_wheel_command_seconds", 0.10)
-        self.declare_parameter("forward_approach_steps", 333)
-        self.declare_parameter("bottle_place_steps", [2350, 2500, 2650])
-        self.declare_parameter("tennis_place_steps", [2350, 2500, 2650])
         self.declare_parameter("controller_ready_file", "")
         self.declare_parameter("scene_ready_file", "")
         self.declare_parameter("scene_ready_timeout_seconds", 60.0)
+        self.declare_parameter("pose_motion_timeout_seconds", 60.0)
+        self.declare_parameter("pose_control_rate_hz", 40.0)
+        self.declare_parameter("position_tolerance_m", 0.010)
+        self.declare_parameter("position_reacquire_tolerance_m", 0.025)
+        self.declare_parameter("yaw_tolerance_degrees", 1.0)
+        self.declare_parameter("pose_stable_samples", 4)
+        self.declare_parameter("pose_linear_kp", 8.0)
+        self.declare_parameter("pose_angular_kp", 4.0)
+        self.declare_parameter("pose_max_linear_wheel_speed", 2.0)
+        self.declare_parameter("pose_max_angular_wheel_speed", 1.8)
+        self.declare_parameter("bottle_grasp_standoff_m", 0.350)
+        self.declare_parameter("tennis_grasp_standoff_m", 0.300)
+        self.declare_parameter("minimum_grasp_approach_m", 0.040)
+        self.declare_parameter("grasp_approach_arrival_tolerance_m", 0.012)
+        self.declare_parameter("grasp_lift_minimum_m", 0.012)
+        self.declare_parameter("grasp_lift_verification_timeout_seconds", 1.50)
+        self.declare_parameter("cycle_return_tolerance_m", 0.015)
+        # Curl the two front pads before moving the gripper roots.  This makes
+        # a shallow retaining lip in front of a round ball, then closes the
+        # main jaws slowly so the ball cannot be squeezed straight forward.
+        self.declare_parameter("tennis_tip_preclose_offset_rad", 0.28)
+        self.declare_parameter("tennis_tip_preclose_duration_seconds", 0.90)
+        self.declare_parameter("tennis_tip_guard_pause_seconds", 0.35)
+        self.declare_parameter("tennis_root_close_duration_seconds", 3.20)
+        self.declare_parameter("placement_yaw_degrees", 90.0)
+        self.declare_parameter("placement_distance_m", 0.850)
+        self.declare_parameter("placement_distance_decrement_m", 0.120)
+        self.declare_parameter("placement_minimum_distance_m", 0.250)
+        self.declare_parameter("placement_arrival_tolerance_m", 0.050)
+        self.declare_parameter("classification_zone_margin_m", 0.200)
+        self.declare_parameter("scene_mode", "nominal")
+        self.declare_parameter("total_slot_count", 6)
+        self.declare_parameter("minimum_success_count", 5)
+        self.declare_parameter("class_limit_per_category", 3)
 
         self.detection_timeout = float(
             self.get_parameter("detection_timeout_seconds").value
@@ -83,12 +139,6 @@ class GraspBottleTennisAction(GraspCubeAction):
         )
         self.alignment_tolerance_px = float(
             self.get_parameter("alignment_tolerance_px").value
-        )
-        self.alignment_steps_per_radian = float(
-            self.get_parameter("alignment_steps_per_radian").value
-        )
-        self.max_alignment_corrections = int(
-            self.get_parameter("max_alignment_corrections").value
         )
         self.alignment_kp = float(
             self.get_parameter("alignment_kp").value
@@ -108,18 +158,6 @@ class GraspBottleTennisAction(GraspCubeAction):
         self.max_grasp_retries = int(
             self.get_parameter("max_grasp_retries").value
         )
-        self.minimum_wheel_command_duration = float(
-            self.get_parameter("minimum_wheel_command_seconds").value
-        )
-        self.forward_approach_steps = int(
-            self.get_parameter("forward_approach_steps").value
-        )
-        self.bottle_place_steps = list(
-            self.get_parameter("bottle_place_steps").value
-        )
-        self.tennis_place_steps = list(
-            self.get_parameter("tennis_place_steps").value
-        )
         self.controller_ready_file = str(
             self.get_parameter("controller_ready_file").value
         )
@@ -127,6 +165,112 @@ class GraspBottleTennisAction(GraspCubeAction):
         self.scene_ready_timeout = float(
             self.get_parameter("scene_ready_timeout_seconds").value
         )
+        self.pose_motion_timeout = float(
+            self.get_parameter("pose_motion_timeout_seconds").value
+        )
+        pose_control_rate = float(
+            self.get_parameter("pose_control_rate_hz").value
+        )
+        self.pose_control_period = 1.0 / pose_control_rate
+        self.bottle_grasp_standoff = float(
+            self.get_parameter("bottle_grasp_standoff_m").value
+        )
+        self.tennis_grasp_standoff = float(
+            self.get_parameter("tennis_grasp_standoff_m").value
+        )
+        self.minimum_grasp_approach = float(
+            self.get_parameter("minimum_grasp_approach_m").value
+        )
+        self.grasp_approach_arrival_tolerance = float(
+            self.get_parameter("grasp_approach_arrival_tolerance_m").value
+        )
+        self.grasp_lift_minimum = float(
+            self.get_parameter("grasp_lift_minimum_m").value
+        )
+        self.grasp_lift_verification_timeout = float(
+            self.get_parameter("grasp_lift_verification_timeout_seconds").value
+        )
+        self.cycle_return_tolerance = float(
+            self.get_parameter("cycle_return_tolerance_m").value
+        )
+        self.tennis_tip_preclose_offset = float(
+            self.get_parameter("tennis_tip_preclose_offset_rad").value
+        )
+        self.tennis_tip_preclose_duration = float(
+            self.get_parameter("tennis_tip_preclose_duration_seconds").value
+        ) / self.speed_scale
+        self.tennis_tip_guard_pause = float(
+            self.get_parameter("tennis_tip_guard_pause_seconds").value
+        ) / self.speed_scale
+        self.tennis_root_close_duration = float(
+            self.get_parameter("tennis_root_close_duration_seconds").value
+        ) / self.speed_scale
+        placement_yaw_degrees = float(
+            self.get_parameter("placement_yaw_degrees").value
+        )
+        if not math.isclose(abs(placement_yaw_degrees), 90.0, abs_tol=1.0e-6):
+            raise GraspActionError("placement_yaw_degrees must be exactly 90")
+        self.placement_yaw = math.pi * 0.5
+        self.placement_distance = float(
+            self.get_parameter("placement_distance_m").value
+        )
+        self.placement_distance_decrement = float(
+            self.get_parameter("placement_distance_decrement_m").value
+        )
+        self.placement_minimum_distance = float(
+            self.get_parameter("placement_minimum_distance_m").value
+        )
+        self.placement_arrival_tolerance = float(
+            self.get_parameter("placement_arrival_tolerance_m").value
+        )
+        self.classification_zone_margin = float(
+            self.get_parameter("classification_zone_margin_m").value
+        )
+        self.run_count = int(self.get_parameter("total_slot_count").value)
+        self.minimum_success_count = int(
+            self.get_parameter("minimum_success_count").value
+        )
+        class_limit = int(
+            self.get_parameter("class_limit_per_category").value
+        )
+        self.scene_mode = str(self.get_parameter("scene_mode").value).strip()
+        if self.scene_mode not in {"nominal", "unknown", "empty", "tennis_only"}:
+            raise GraspActionError(f"unsupported scene_mode: {self.scene_mode}")
+        if self.scene_mode == "tennis_only":
+            # Placement-debug mode: no bottle entities and no bottle-class
+            # detections are accepted. Six balls exercise repeated return,
+            # exact turn, distant placement, and return-home behavior.
+            self.run_count = 6
+            self.minimum_success_count = 5
+            self.expected_counts = {BOTTLE: 0, TENNIS: 6}
+            self.enabled_classes = {TENNIS}
+            self.require_two_categories = False
+        else:
+            self.expected_counts = {BOTTLE: class_limit, TENNIS: class_limit}
+            self.enabled_classes = {BOTTLE, TENNIS}
+            self.require_two_categories = True
+        self.pose_controller = PoseController(PoseControllerConfig(
+            position_tolerance=float(
+                self.get_parameter("position_tolerance_m").value
+            ),
+            position_reacquire_tolerance=float(
+                self.get_parameter("position_reacquire_tolerance_m").value
+            ),
+            yaw_tolerance=math.radians(float(
+                self.get_parameter("yaw_tolerance_degrees").value
+            )),
+            required_stable_samples=int(
+                self.get_parameter("pose_stable_samples").value
+            ),
+            linear_kp=float(self.get_parameter("pose_linear_kp").value),
+            angular_kp=float(self.get_parameter("pose_angular_kp").value),
+            max_linear_wheel_speed=float(
+                self.get_parameter("pose_max_linear_wheel_speed").value
+            ),
+            max_angular_wheel_speed=float(
+                self.get_parameter("pose_max_angular_wheel_speed").value
+            ),
+        ))
 
         if not self.stable_window_frames >= self.stable_required_frames >= 1:
             raise GraspActionError("stable window must be >= required frames >= 1")
@@ -134,18 +278,47 @@ class GraspBottleTennisAction(GraspCubeAction):
             self.detection_timeout,
             self.stable_center_spread_px,
             self.alignment_tolerance_px,
-            self.alignment_steps_per_radian,
-            self.minimum_wheel_command_duration,
         ) <= 0.0:
             raise GraspActionError("vision timing and alignment values must be positive")
         if min(
-            self.max_alignment_corrections,
-            self.max_grasp_retries + 1,
-            self.forward_approach_steps,
-        ) < 1:
-            raise GraspActionError("vision retries and forward steps are invalid")
-        for sequence in (self.bottle_place_steps, self.tennis_place_steps):
-            placement_step(sequence, 0)
+            self.pose_motion_timeout,
+            pose_control_rate,
+            self.bottle_grasp_standoff,
+            self.tennis_grasp_standoff,
+            self.minimum_grasp_approach,
+            self.grasp_approach_arrival_tolerance,
+            self.grasp_lift_minimum,
+            self.grasp_lift_verification_timeout,
+            self.cycle_return_tolerance,
+            self.tennis_tip_preclose_duration,
+            self.tennis_tip_guard_pause,
+            self.tennis_root_close_duration,
+            self.placement_yaw,
+            self.placement_distance,
+            self.placement_arrival_tolerance,
+            self.classification_zone_margin,
+        ) <= 0.0:
+            raise GraspActionError("pose-feedback parameters must be positive")
+        if not 0.0 <= self.placement_distance_decrement < self.placement_distance:
+            raise GraspActionError(
+                "placement_distance_decrement_m must be nonnegative and below start"
+            )
+        if not 0.0 < self.placement_minimum_distance <= self.placement_distance:
+            raise GraspActionError(
+                "placement_minimum_distance_m must be positive and at most start"
+            )
+        if not 0.0 <= self.tennis_tip_preclose_offset <= 0.60:
+            raise GraspActionError(
+                "tennis_tip_preclose_offset_rad must be between 0 and 0.60"
+            )
+        if self.max_grasp_retries < 0:
+            raise GraspActionError("max_grasp_retries cannot be negative")
+        if not 1 <= self.minimum_success_count <= self.run_count:
+            raise GraspActionError(
+                "minimum_success_count must be between one and total_slot_count"
+            )
+        if class_limit < 1:
+            raise GraspActionError("class_limit_per_category must be positive")
 
         self.camera_width = None
         self.camera_focal_x = None
@@ -159,22 +332,39 @@ class GraspBottleTennisAction(GraspCubeAction):
             qos_profile_sensor_data,
         )
         self.create_subscription(String, "/detections", self._detection_callback, 10)
+        vision_control_qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.vision_enable_publisher = self.create_publisher(
+            Bool,
+            "/vision_sorting/enable_detection",
+            vision_control_qos,
+        )
 
         self.category_counts = {BOTTLE: 0, TENNIS: 0}
         self._current_class = None
-        self._alignment_steps = 0
-        self._placement_relative_steps = 0
-        self._forward_offset_active = False
         self._active_initial_positions = None
-        self._ignore_detections = False
-        self._cycle_wheel_positions = None
+        self._ignore_detections = True
         self._identity = None
         self._locked_object_id = None
         self._locked_object_origin = None
-        self._cycle_yaw = None
+        self._cycle_pose = None
+        self._sorting_home_pose = None
         self._aligned_yaw = None
+        self._placement_ready = False
+        self._placement_departure_pose = None
+        self._placement_heading = None
+        self._placement_return_pending = False
+        self._approach_departure_pose = None
+        self._approach_heading = None
+        self._approach_return_pending = False
+        self._active_sort_attempt = 1
+        self._last_attempt_failure = None
         self.camera_focal_y = None
         self.camera_principal_y = None
+        self.task_state = SortingStateMachine(self._publish_status)
 
     @staticmethod
     def _write_ready_file(path_text):
@@ -182,6 +372,19 @@ class GraspBottleTennisAction(GraspCubeAction):
             path = Path(path_text)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("ready\n", encoding="utf-8")
+
+    def _set_vision_enabled(self, enabled, reason):
+        """Gate both YOLO inference and controller-side detection intake."""
+        enabled = bool(enabled)
+        self._ignore_detections = not enabled
+        self.detection_frames.clear()
+        message = Bool()
+        message.data = enabled
+        for _ in range(3):
+            self.vision_enable_publisher.publish(message)
+        self._publish_status(
+            f"VISION {'ENABLED' if enabled else 'PAUSED'} | reason={reason}"
+        )
 
     def _wait_for_scene_ready(self):
         if not self.scene_ready_file:
@@ -218,7 +421,7 @@ class GraspBottleTennisAction(GraspCubeAction):
             for detection in payload.get("detections", []):
                 task_class = canonical_class(detection.get("class_name", ""))
                 bbox = detection.get("bbox", {})
-                if task_class is None or not all(
+                if task_class not in self.enabled_classes or not all(
                     key in bbox for key in ("x1", "y1", "x2", "y2")
                 ):
                     continue
@@ -230,7 +433,9 @@ class GraspBottleTennisAction(GraspCubeAction):
                     clean, self.latest_joint_state,
                     (self.camera_focal_x, self.camera_focal_y,
                      self.camera_principal_x, self.camera_principal_y),
-                    locked=self._locked_object_id, counts=self.category_counts,
+                    locked=self._locked_object_id,
+                    counts=self.category_counts,
+                    class_limits=self.expected_counts,
                 )
             self.detection_frames.append(clean)
             self.last_detection_frame_number = frame_number
@@ -292,87 +497,9 @@ class GraspBottleTennisAction(GraspCubeAction):
                 )
                 return detection
         class_text = preferred_class or "bottle/tennis"
-        raise GraspActionError(
+        raise RetryableAcquisitionError(
             f"no stable {class_text} detection within {self.detection_timeout:.1f} s"
         )
-
-    def _wheel_motion_profile(self, steps):
-        """Preserve calibrated travel while respecting the 100 Hz control loop."""
-        nominal_duration = (
-            abs(int(steps)) * self.physics_step_seconds / self.speed_scale
-        )
-        duration = max(nominal_duration, self.minimum_wheel_command_duration)
-        command_speed = self.wheel_speed * nominal_duration / duration
-        return command_speed, duration
-
-    def _wheel_positions(self):
-        if self.latest_joint_state is None:
-            return None
-        values = dict(
-            zip(self.latest_joint_state.name, self.latest_joint_state.position)
-        )
-        names = (
-            "front_left_wheel_joint",
-            "front_right_wheel_joint",
-            "rear_left_wheel_joint",
-            "rear_right_wheel_joint",
-        )
-        if not all(name in values for name in names):
-            return None
-        return tuple(float(values[name]) for name in names)
-
-    def _turn_steps_from_wheel_positions(self, before, after):
-        """Convert measured counter-rotating wheel travel to signed turn steps."""
-        if before is None or after is None:
-            return None
-        deltas = tuple(end - start for start, end in zip(before, after))
-        signed_wheel_delta = (-deltas[0] + deltas[1] - deltas[2] + deltas[3]) * 0.25
-        radians_per_step = (
-            self.wheel_speed * self.physics_step_seconds / self.speed_scale
-        )
-        if radians_per_step <= 0.0:
-            return None
-        return int(round(signed_wheel_delta / radians_per_step))
-
-    def _rotate_by_steps(self, held_positions, signed_steps, label):
-        signed_steps = int(signed_steps)
-        if signed_steps == 0:
-            return
-        direction = 1.0 if signed_steps > 0 else -1.0
-        command_speed, duration = self._wheel_motion_profile(signed_steps)
-        wheel_command = [
-            -direction * command_speed,
-            direction * command_speed,
-            -direction * command_speed,
-            direction * command_speed,
-        ]
-        self._publish_status(
-            f"{label} | signed_steps={signed_steps} | "
-            f"wheel_speed={command_speed:.3f} | sim_duration={duration:.3f}s"
-        )
-        positions_before = self._wheel_positions()
-        try:
-            def keep_turning(ratio):
-                if ratio >= 1.0:
-                    return
-                self._publish(held_positions, repeat=1)
-                self._publish_to(self.wheel_publisher, wheel_command, repeat=1)
-
-            self._wait_sim_duration(duration, callback=keep_turning)
-        finally:
-            self._publish_to(self.wheel_publisher, [0.0] * 4, repeat=10)
-            self._publish(held_positions, repeat=10)
-        self._wait_sim_duration(self.post_turn_settle_duration)
-        positions_after = self._wheel_positions()
-        if positions_before is not None and positions_after is not None:
-            deltas = tuple(
-                after - before
-                for before, after in zip(positions_before, positions_after)
-            )
-            self._publish_status(
-                "WHEEL MOTION FEEDBACK | joint_delta="
-                + ",".join(f"{value:.4f}" for value in deltas)
-            )
 
     def _align_to_visual_target(self, held_positions):
         """Continuously rotate the chassis while visually centering the target."""
@@ -381,10 +508,11 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._locked_object_id = detection['object_id']
         if self._locked_object_origin is None:
             self._locked_object_origin = self._identity.position(self._locked_object_id)
-        alignment_positions_before = self._wheel_positions()
+        alignment_yaw_before = self._identity.yaw()
 
-        # 根据目标最初相对摄像头的角度决定最终向前插入距离。
-        # 中间槽位约 ±10° -> 1 cm；外侧槽位约 ±30° -> 2 cm。
+        # The image angle is diagnostic.  Forward travel is no longer chosen
+        # from a time/step table; the measured object and chassis coordinates
+        # determine a standoff pose after visual locking.
         initial_target_angle = abs(
             horizontal_angle_radians(
                 detection,
@@ -396,25 +524,50 @@ class GraspBottleTennisAction(GraspCubeAction):
         robot_position = self._identity.position('robomaster_ep_core')
         target_position = self._identity.position(self._locked_object_id)
         yaw = self._identity.yaw()
+        coarse_target_yaw = None
         if robot_position is not None and target_position is not None and yaw is not None:
-            bearing = math.atan2(target_position[1]-robot_position[1],
-                                 target_position[0]-robot_position[0]) - yaw
-            initial_target_angle = abs(math.atan2(math.sin(bearing), math.cos(bearing)))
-
-        if math.degrees(initial_target_angle) < 20.0:
-            self.final_insert_steps = 67      # 约 1 cm
-            insert_distance = "1 cm (middle slot)"
-        else:
-            self.final_insert_steps = 133     # 约 2 cm
-            insert_distance = "2 cm (outer slot)"
+            coarse_target_yaw = math.atan2(
+                target_position[1] - robot_position[1],
+                target_position[0] - robot_position[0],
+            )
+            bearing_error = wrap_angle(coarse_target_yaw - yaw)
+            initial_target_angle = abs(bearing_error)
 
         self._publish_status(
-            "FINAL INSERT SELECT | "
+            "TARGET GEOMETRY LOCKED | "
             f"class={target_class} | "
             f"initial_angle={math.degrees(initial_target_angle):.1f} deg | "
-            f"distance={insert_distance} | "
-            f"steps={self.final_insert_steps}"
+            "approach=measured_pose_standoff"
         )
+
+        # YOLO selects and locks the physical entity.  Gazebo world feedback
+        # then performs the large, deterministic part of the turn; YOLO is
+        # deliberately kept enabled and performs the final camera correction.
+        # This avoids asking a low-FPS Jetson detector to finish a 55-degree
+        # outer-slot rotation inside one short alignment timeout.
+        if coarse_target_yaw is not None:
+            current_pose = self._identity.pose2d()
+            if current_pose is None:
+                raise RetryableAcquisitionError(
+                    "pose feedback lost before coarse target alignment"
+                )
+            self._publish_status(
+                "COARSE WORLD-BEARING ALIGN | "
+                f"id={self._locked_object_id} | "
+                f"target_yaw={math.degrees(coarse_target_yaw):.2f} deg | "
+                "fine_stage=live_vision"
+            )
+            self._drive_to_pose(
+                held_positions,
+                Pose2D(current_pose.x, current_pose.y, coarse_target_yaw),
+                "COARSE ALIGN TO LOCKED OBJECT COORDINATE",
+                control_mode="yaw",
+            )
+            # Discard pre-turn boxes and establish a new stable observation at
+            # the coarse heading before applying pixel-level corrections.
+            detection = self._wait_stable_detection(
+                preferred_class=target_class
+            )
 
         def center_x(item):
             box = item["bbox"]
@@ -425,10 +578,7 @@ class GraspBottleTennisAction(GraspCubeAction):
         current_turn_speed = 0.0
         aligned_frames = 0
         last_frame_number = self.last_detection_frame_number
-        last_sim_time = self.latest_sim_time
         log_counter = 0
-
-        self._alignment_steps = 0
 
         self._publish_status(
             f"CONTINUOUS VISUAL ALIGN START | class={target_class}"
@@ -524,8 +674,7 @@ class GraspBottleTennisAction(GraspCubeAction):
                         min(speed, self.alignment_max_speed),
                     )
 
-                    # Keep the same steering direction as the old:
-                    # steps = -angle_to_steps(...)
+                    # Image-right error requires clockwise chassis motion.
                     desired_turn_speed = (
                         -speed if error_px > 0.0 else speed
                     )
@@ -552,31 +701,6 @@ class GraspBottleTennisAction(GraspCubeAction):
                     repeat=1,
                 )
 
-                # Convert continuous rotation back into the old calibrated
-                # signed-step representation so placement/restoration works.
-                current_sim_time = self.latest_sim_time
-
-                if (
-                    last_sim_time is not None
-                    and current_sim_time is not None
-                    and current_sim_time > last_sim_time
-                    and abs(current_turn_speed) > 0.01
-                ):
-                    dt = current_sim_time - last_sim_time
-
-                    step_rate = (
-                        current_turn_speed
-                        / self.wheel_speed
-                        * self.speed_scale
-                        / self.physics_step_seconds
-                    )
-
-                    self._alignment_steps += int(
-                        round(step_rate * dt)
-                    )
-
-                last_sim_time = current_sim_time
-
                 log_counter += 1
                 if log_counter % 5 == 0:
                     self.get_logger().info(
@@ -602,8 +726,7 @@ class GraspBottleTennisAction(GraspCubeAction):
                     self._publish_status(
                         "TARGET ALIGNED | "
                         f"class={target_class} | "
-                        f"error_px={error_px:.1f} | "
-                        f"total_steps={self._alignment_steps}"
+                        f"error_px={error_px:.1f} | feedback=vision"
                     )
 
                     return target_class
@@ -617,18 +740,17 @@ class GraspBottleTennisAction(GraspCubeAction):
             self._publish(held_positions, repeat=10)
             self._wait_sim_duration(self.post_turn_settle_duration)
             self._aligned_yaw = self._identity.yaw()
-            measured_steps = self._turn_steps_from_wheel_positions(
-                alignment_positions_before,
-                self._wheel_positions(),
-            )
-            if measured_steps is not None:
-                self._alignment_steps = measured_steps
+            if self._aligned_yaw is not None and alignment_yaw_before is not None:
+                yaw_delta = math.atan2(
+                    math.sin(self._aligned_yaw - alignment_yaw_before),
+                    math.cos(self._aligned_yaw - alignment_yaw_before),
+                )
                 self._publish_status(
-                    "VISUAL ALIGNMENT ODOMETRY | "
-                    f"measured_steps={self._alignment_steps}"
+                    "VISUAL ALIGNMENT WORLD POSE | "
+                    f"yaw_delta_deg={math.degrees(yaw_delta):.2f}"
                 )
 
-        raise GraspActionError(
+        raise RetryableAcquisitionError(
             f"unable to continuously center {target_class} "
             f"within {self.alignment_tolerance_px:.1f} px"
         )
@@ -640,6 +762,94 @@ class GraspBottleTennisAction(GraspCubeAction):
         pitch_delta = self.arm_extend_delta + self.arm_2_delta
         pose[index["endpoint_bracket_joint"]] -= pitch_delta * fraction
         return pose
+
+    def _gripper_pose(self, pose, initial, index, opened):
+        """Keep ordinary opening, but retain a curled front pad when closed."""
+        result = super()._gripper_pose(pose, initial, index, opened)
+        if self._use_tennis_grasp:
+            if opened:
+                result = tennis_open_pose(result, initial, index)
+            else:
+                result = tennis_closed_pose(
+                    result,
+                    initial,
+                    index,
+                    self.tennis_tip_preclose_offset,
+                )
+        return result
+
+    def _move_gripper(self, label, start, target):
+        """For tennis only: front pads first, root joints second."""
+        index = {name: i for i, name in enumerate(POSITION_JOINTS)}
+        staged_close = (
+            self._use_tennis_grasp
+            and is_tip_first_closing(start, target, index)
+        )
+        if not staged_close:
+            super()._move_gripper(label, start, target)
+            return
+
+        guarded = tip_first_pose(start, target, index)
+        self._publish_status(
+            "TENNIS GRIP PHASE 1/2 | curl front pads first | "
+            f"offset={self.tennis_tip_preclose_offset:.3f} rad"
+        )
+        self._move_interpolated(
+            "网球抓取阶段 1：指尖先内收形成挡球唇",
+            start,
+            guarded,
+            self.tennis_tip_preclose_duration,
+        )
+        self._publish_status(
+            "TENNIS TIP GUARD READY | roots remain open; settling before clamp"
+        )
+        self._settle(guarded, self.tennis_tip_guard_pause)
+
+        self._publish_status(
+            "TENNIS GRIP PHASE 2/2 | close roots slowly behind guarded ball"
+        )
+        self._move_interpolated(
+            "网球抓取阶段 2：根部缓慢合拢夹紧",
+            guarded,
+            target,
+            self.tennis_root_close_duration,
+        )
+
+    def _is_fully_closed(self, closed_pose, index):
+        # A tennis ball may be retained by the curled joint_5 pads while the
+        # two root joints still reach their nominal command.  Its measured
+        # world-height change after the test lift is the authoritative check.
+        if self._use_tennis_grasp:
+            return False
+        return super()._is_fully_closed(closed_pose, index)
+
+    def _verify_locked_object_lift(self):
+        """Require the locked entity to rise with the test-lift motion."""
+        if self._locked_object_id is None or self._locked_object_origin is None:
+            raise GraspActionError("test lift has no locked object pose")
+        origin_z = float(self._locked_object_origin[2])
+        deadline = time.monotonic() + self.grasp_lift_verification_timeout
+        best_lift = float("-inf")
+        while rclpy.ok() and time.monotonic() < deadline:
+            rclpy.spin_once(self, timeout_sec=0.05)
+            position = self._identity.position(self._locked_object_id)
+            if position is None:
+                continue
+            lift = float(position[2]) - origin_z
+            best_lift = max(best_lift, lift)
+            if lift >= self.grasp_lift_minimum:
+                self._publish_status(
+                    "REAL GRASP VERIFIED | "
+                    f"id={self._locked_object_id} | lift={lift:.3f} m"
+                )
+                return True
+        measured = "unavailable" if not math.isfinite(best_lift) else f"{best_lift:.3f} m"
+        self._publish_status(
+            "MISSED GRASP DETECTED | "
+            f"id={self._locked_object_id} | lift={measured} | "
+            f"required={self.grasp_lift_minimum:.3f} m"
+        )
+        return False
 
     @staticmethod
     def _vertical_clearance_pose(source, initial):
@@ -653,6 +863,11 @@ class GraspBottleTennisAction(GraspCubeAction):
         return pose
 
     def _move(self, label, start, target):
+        if label == "下降到放置位" and not self._placement_ready:
+            raise GraspActionError(
+                "refusing to lower: retreat, exact 90 degree turn, and "
+                "placement travel have not all been verified"
+            )
         if (
             label == "释放后抬臂离开"
             and self._use_tennis_grasp
@@ -667,6 +882,12 @@ class GraspBottleTennisAction(GraspCubeAction):
             target[:] = retracted
             return
         super()._move(label, start, target)
+        if (
+            label == "小幅试抬"
+            and self._current_class in (BOTTLE, TENNIS)
+            and not self._verify_locked_object_lift()
+        ):
+            raise MissedGraspError("locked object did not rise during test lift")
 
     def _safe_home_pose(self, initial, current, index):
         if not self._use_tennis_grasp:
@@ -681,56 +902,333 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._publish_status("SAFE HOME COMPLETE: lifted first, then retracted")
         return home_open
 
-    def _move_chassis_linear(self, held_positions, forward):
-        direction = 1.0 if forward else -1.0
-        command_speed, duration = self._wheel_motion_profile(
-            self.forward_approach_steps
+    def _drive_to_pose(
+        self,
+        held_positions,
+        target,
+        label,
+        allow_reverse=False,
+        control_mode="pose",
+        travel_yaw=None,
+        arrival_tolerance=None,
+    ):
+        """Run one explicit feedback phase: position, yaw, or full pose."""
+        if not isinstance(target, Pose2D):
+            raise GraspActionError(f"{label}: target is not a Pose2D")
+        if control_mode not in {"position", "yaw", "pose", "straight"}:
+            raise GraspActionError(f"{label}: invalid control mode {control_mode}")
+        if control_mode == "straight":
+            if travel_yaw is None or arrival_tolerance is None:
+                raise GraspActionError(
+                    f"{label}: straight mode needs travel_yaw and arrival_tolerance"
+                )
+        starting_pose = self._identity.pose2d()
+        if starting_pose is None:
+            raise GraspActionError(f"{label}: measured chassis pose is unavailable")
+        self._publish_status(
+            f"POSE TARGET | label={label} | mode={control_mode} | "
+            f"from=({starting_pose.x:.4f},{starting_pose.y:.4f},"
+            f"{math.degrees(starting_pose.yaw):.2f}deg) | "
+            f"to=({target.x:.4f},{target.y:.4f},"
+            f"{math.degrees(target.yaw):.2f}deg)"
         )
-        wheel_command = [direction * command_speed] * 4
-        label = "FORWARD 5 CM" if forward else "RESTORE BACKWARD 5 CM"
-        self._publish_status(f"TENNIS CHASSIS {label}")
+        self.pose_controller.reset()
+        deadline = time.monotonic() + self.pose_motion_timeout
+        last_valid_pose = time.monotonic()
+        previous_phase = None
+        log_counter = 0
         try:
-            def keep_moving(ratio):
-                if ratio >= 1.0:
-                    return
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=self.pose_control_period)
+                current = self._identity.pose2d()
+                if current is None:
+                    self._publish_to(self.wheel_publisher, [0.0] * 4, repeat=1)
+                    if time.monotonic() - last_valid_pose > 2.0:
+                        raise GraspActionError(
+                            f"{label}: measured chassis pose became stale"
+                        )
+                    continue
+                last_valid_pose = time.monotonic()
+                if control_mode == "position":
+                    output = self.pose_controller.compute_position(
+                        current,
+                        target,
+                        allow_reverse=allow_reverse,
+                        arrival_tolerance=arrival_tolerance,
+                    )
+                elif control_mode == "yaw":
+                    output = self.pose_controller.compute_yaw(current, target)
+                elif control_mode == "straight":
+                    output = self.pose_controller.compute_straight(
+                        current,
+                        target,
+                        travel_yaw,
+                        arrival_tolerance,
+                    )
+                else:
+                    output = self.pose_controller.compute(
+                        current,
+                        target,
+                        allow_reverse=allow_reverse,
+                    )
+                if control_mode == "yaw":
+                    # A yaw phase must be a true skid-steer pivot: left and
+                    # right wheels are equal and opposite, with zero forward
+                    # component. Refuse any future controller regression that
+                    # would drive an arc while carrying an object.
+                    wheels = output.wheels
+                    in_place = (
+                        math.isclose(wheels[0], wheels[2], abs_tol=1.0e-9)
+                        and math.isclose(wheels[1], wheels[3], abs_tol=1.0e-9)
+                        and math.isclose(wheels[0], -wheels[1], abs_tol=1.0e-9)
+                    )
+                    if not in_place:
+                        raise GraspActionError(
+                            f"{label}: yaw controller generated non-pivot wheels"
+                        )
                 self._publish(held_positions, repeat=1)
-                self._publish_to(self.wheel_publisher, wheel_command, repeat=1)
-
-            self._wait_sim_duration(duration, callback=keep_moving)
+                self._publish_to(
+                    self.wheel_publisher, list(output.wheels), repeat=1
+                )
+                log_counter += 1
+                if output.phase != previous_phase or log_counter % 20 == 0:
+                    self.get_logger().info(
+                        f"POSE FEEDBACK | label={label} | phase={output.phase} | "
+                        f"position_error={output.position_error:.4f} m | "
+                        f"yaw_error={math.degrees(output.yaw_error):.2f} deg"
+                    )
+                    previous_phase = output.phase
+                if output.reached:
+                    self._publish_status(
+                        f"POSE REACHED | label={label} | "
+                        f"position_error={output.position_error:.4f} m | "
+                        f"yaw_error={math.degrees(output.yaw_error):.2f} deg"
+                    )
+                    return current
         finally:
             self._publish_to(self.wheel_publisher, [0.0] * 4, repeat=10)
             self._publish(held_positions, repeat=10)
-        self._wait_sim_duration(self.post_turn_settle_duration)
+        raise GraspActionError(
+            f"{label}: pose target did not converge within "
+            f"{self.pose_motion_timeout:.1f} s"
+        )
+
+    def _approach_locked_object(self, held_positions):
+        self.task_state.transition(SortingState.APPROACH)
+        current = self._identity.pose2d()
+        target_position = self._identity.position(self._locked_object_id)
+        if current is None or target_position is None:
+            raise GraspActionError("cannot compute grasp standoff from stale pose")
+        standoff = (
+            self.tennis_grasp_standoff
+            if self._current_class == TENNIS
+            else self.bottle_grasp_standoff
+        )
+        # The camera has just centred this object.  Freeze that measured world
+        # heading as the grasp corridor instead of recomputing a slightly
+        # different bearing from noisy entity x/y samples.  Only progress on
+        # this one axis is controlled, so the base cannot chase the endpoint
+        # alternately to the left and right.
+        locked_heading = current.yaw
+        object_distance = math.hypot(
+            float(target_position[0]) - current.x,
+            float(target_position[1]) - current.y,
+        )
+        travel_distance = max(0.0, object_distance - standoff)
+        if travel_distance < self.minimum_grasp_approach:
+            self._publish_status(
+                "UNSAFE SHORT APPROACH REJECTED | "
+                f"object_distance={object_distance:.3f} m | "
+                f"standoff={standoff:.3f} m | "
+                f"travel={travel_distance:.3f} m | action=return_home_reacquire"
+            )
+            raise RetryableAcquisitionError(
+                "locked target is already inside the minimum approach corridor"
+            )
+        target = Pose2D(
+            current.x + travel_distance * math.cos(locked_heading),
+            current.y + travel_distance * math.sin(locked_heading),
+            locked_heading,
+        )
+        self._approach_departure_pose = current
+        self._approach_heading = locked_heading
+        self._approach_return_pending = True
+        self._publish_status(
+            "STRAIGHT GRASP CORRIDOR LOCKED | "
+            f"yaw={math.degrees(locked_heading):.2f} deg | "
+            f"travel={travel_distance:.3f} m | steering=heading_hold_only"
+        )
+        self._drive_to_pose(
+            held_positions,
+            target,
+            f"APPROACH POSITION {self._locked_object_id} AT {standoff:.3f} M",
+            control_mode="straight",
+            travel_yaw=locked_heading,
+            arrival_tolerance=self.grasp_approach_arrival_tolerance,
+        )
+        measured = self._identity.pose2d()
+        object_after = self._identity.position(self._locked_object_id)
+        if measured is None or object_after is None:
+            raise GraspActionError("pose feedback lost after grasp approach")
+        remaining = math.hypot(
+            float(object_after[0]) - measured.x,
+            float(object_after[1]) - measured.y,
+        )
+        if abs(remaining - standoff) > 0.025:
+            raise GraspActionError(
+                f"grasp standoff verification failed: {remaining:.3f} m"
+            )
+        self._publish_status(
+            f"GRASP STANDOFF VERIFIED | distance={remaining:.3f} m"
+        )
+
+    def _reverse_approach_corridor(self, held_positions):
+        """Back out along the visually aligned approach without turning."""
+        if not self._approach_return_pending:
+            return
+        if self._approach_departure_pose is None or self._approach_heading is None:
+            raise GraspActionError("approach return requested without corridor pose")
+        self._publish_status(
+            "REVERSE GRASP CORRIDOR | fixed heading back to pre-approach pose"
+        )
+        self._drive_to_pose(
+            held_positions,
+            self._approach_departure_pose,
+            "REVERSE STRAIGHT FROM GRASP",
+            control_mode="straight",
+            travel_yaw=self._approach_heading,
+            arrival_tolerance=self.grasp_approach_arrival_tolerance,
+        )
+        self._approach_return_pending = False
 
     def _rotate_chassis(self, held_positions):
+        self._placement_ready = False
+        self._placement_departure_pose = None
+        self._placement_heading = None
+        self._placement_return_pending = False
         if self._current_class not in (BOTTLE, TENNIS):
             raise GraspActionError("placement requested without a vision class")
-        sequence = (
-            self.bottle_place_steps
-            if self._current_class == BOTTLE
-            else self.tennis_place_steps
+        if self._cycle_pose is None:
+            raise GraspActionError("placement requested without a fresh cycle pose")
+        cycle_pose = self._cycle_pose
+
+        # First carry the grasped object backwards along the clear approach
+        # corridor.  Do not sweep the arm through the remaining objects.
+        self.task_state.transition(SortingState.RETREAT)
+        self._publish_status("RETREAT BEFORE CLASSIFICATION | straight reverse")
+        self._reverse_approach_corridor(held_positions)
+        self._drive_to_pose(
+            held_positions,
+            cycle_pose,
+            "CONFIRM RETREAT WITHIN CYCLE CENTER REGION",
+            allow_reverse=True,
+            control_mode="position",
+            arrival_tolerance=self.cycle_return_tolerance,
         )
-        magnitude = placement_step(
-            sequence, self.category_counts[self._current_class]
-        )
-        # Positive is robot-right and negative is robot-left.
-        # Bottle -> robot right; Tennis -> robot left.
-        desired_absolute = -magnitude if self._current_class == BOTTLE else magnitude
-        self._placement_relative_steps = desired_absolute - self._alignment_steps
+
+        # World +yaw is left.  Bottle marker is on robot-right (-y), tennis
+        # marker is on robot-left (+y).
+        offset = -self.placement_yaw if self._current_class == BOTTLE else self.placement_yaw
+        target_yaw = wrap_angle(cycle_pose.yaw + offset)
         zone = (
             "RIGHT BOTTLE ZONE"
             if self._current_class == BOTTLE
             else "LEFT TENNIS ZONE"
         )
-        self._rotate_by_steps(
+        self.task_state.transition(SortingState.PLACE, zone)
+        turn_direction = (
+            "CLOCKWISE/RIGHT" if self._current_class == BOTTLE
+            else "COUNTERCLOCKWISE/LEFT"
+        )
+        self._publish_status(
+            "CLASS-SPECIFIC IN-PLACE TURN | "
+            f"class={self._current_class} | direction={turn_direction} | "
+            "wheel_contract=left_equals_negative_right"
+        )
+        self._publish_status(
+            "DIRECT CLASSIFICATION TURN | center region confirmed; "
+            "skip redundant intermediate home-yaw turn"
+        )
+        self._drive_to_pose(
             held_positions,
-            self._placement_relative_steps,
-            f"TURN TO {zone}",
+            Pose2D(cycle_pose.x, cycle_pose.y, target_yaw),
+            f"TURN EXACTLY 90 DEG TO {zone}",
+            control_mode="yaw",
+        )
+        measured = self._identity.pose2d()
+        if measured is None:
+            raise GraspActionError("pose feedback lost after exact 90 degree turn")
+        actual_offset = wrap_angle(measured.yaw - cycle_pose.yaw)
+        if abs(wrap_angle(actual_offset - offset)) > self.pose_controller.config.yaw_tolerance:
+            raise GraspActionError(
+                "classification turn did not settle at exactly 90 degrees"
+            )
+        self._publish_status(
+            "EXACT CLASSIFICATION TURN VERIFIED | "
+            f"delta={math.degrees(actual_offset):.2f} deg"
+        )
+
+        # Use the measured post-turn position as the start of the straight
+        # placement leg. In-place skid steering can translate a few cm, and
+        # forcing x/y back to the pre-turn point would undo the 90-degree turn.
+        placement_distance = placement_distance_for_attempt(
+            self.placement_distance,
+            self.placement_distance_decrement,
+            self.placement_minimum_distance,
+            self._active_sort_attempt,
+        )
+        self._publish_status(
+            "PLACEMENT DISTANCE SCHEDULE | "
+            f"attempt={self._active_sort_attempt}/{self.run_count} | "
+            f"distance={placement_distance:.3f} m | "
+            f"start={self.placement_distance:.3f} m | "
+            f"decrement={self.placement_distance_decrement:.3f} m"
+        )
+        placement_pose = Pose2D(
+            measured.x + placement_distance * math.cos(target_yaw),
+            measured.y + placement_distance * math.sin(target_yaw),
+            target_yaw,
+        )
+        self._placement_departure_pose = measured
+        self._placement_heading = target_yaw
+        self._placement_return_pending = True
+        self._drive_to_pose(
+            held_positions,
+            placement_pose,
+            f"DRIVE {placement_distance:.3f} M TO {zone}",
+            control_mode="straight",
+            travel_yaw=target_yaw,
+            arrival_tolerance=self.placement_arrival_tolerance,
+        )
+        self._placement_ready = True
+        self._publish_status(
+            "PLACEMENT CORRIDOR ARRIVAL VERIFIED | stop, lower, and release; "
+            "no endpoint turn"
         )
 
     def _run_once(self, attempt, initial, current, index):
         self._active_initial_positions = list(initial)
-        return super()._run_once(attempt, initial, current, index)
+        self._active_sort_attempt = int(attempt)
+        self._last_attempt_failure = None
+        self._placement_ready = False
+        self._placement_departure_pose = None
+        self._placement_heading = None
+        self._placement_return_pending = False
+        self.task_state.transition(SortingState.GRASP)
+        try:
+            result = super()._run_once(attempt, initial, current, index)
+        except MissedGraspError as error:
+            self._last_attempt_failure = str(error)
+            held = list(self.last_position_command or current)
+            self._publish_status(
+                "RECOVER MISSED GRASP | open, retract arm, return origin, retry round"
+            )
+            self._move_chassis_final_insert(held, forward=False)
+            result = False, self._safe_home_pose(initial, held, index)
+        if not result[0] and self._last_attempt_failure is None:
+            self._last_attempt_failure = "gripper closure reported an empty grasp"
+        self.task_state.transition(SortingState.VERIFY)
+        return result
 
     def _prepare_observation_pose(self, initial, current, index):
         observation = self._gripper_pose(initial, initial, index, opened=True)
@@ -739,80 +1237,127 @@ class GraspBottleTennisAction(GraspCubeAction):
             self._settle(observation)
         return observation
 
+    def _record_unrecognized_or_empty(self, processed_count):
+        """Handle a full detection timeout without inventing a class label."""
+        active = self._identity.active_task_objects()
+        if active:
+            # The entity name is class-neutral.  Pose data establishes only
+            # occupancy; the category remains unknown because YOLO supplied no
+            # stable label.  Exclude one slot and continue safely.
+            robot = self._identity.pose2d()
+            if robot is None:
+                raise GraspActionError(
+                    "cannot handle unrecognized object with stale pose feedback"
+                )
+
+            def scan_order(name):
+                position = self._identity.position(name)
+                if position is None:
+                    return float("inf")
+                bearing = math.atan2(
+                    float(position[1]) - robot.y,
+                    float(position[0]) - robot.x,
+                ) - robot.yaw
+                # Camera-left first, matching the normal detector policy.
+                return -math.atan2(math.sin(bearing), math.cos(bearing))
+
+            object_id = min(active, key=scan_order)
+            self._identity.completed.add(object_id)
+            self._publish_status(
+                "EXCEPTION UNRECOGNIZED | "
+                f"slot={object_id} | action=skip | chassis=stopped"
+            )
+            return 1, 1, 0
+
+        empty_slots = max(0, self.run_count - int(processed_count))
+        if empty_slots:
+            self._publish_status(
+                "EXCEPTION EMPTY GRID | "
+                f"count={empty_slots} | action=skip | chassis=stopped"
+            )
+        return empty_slots, 0, empty_slots
+
     def _restore_world_heading(self, held_positions, target_yaw):
         if target_yaw is None:
             return
-        for correction in range(40):
-            yaw = self._identity.yaw()
-            if yaw is None:
-                raise GraspActionError('world heading feedback lost during restoration')
-            error = math.atan2(math.sin(target_yaw-yaw), math.cos(target_yaw-yaw))
-            if abs(error) <= math.radians(1.0):
-                self._publish_status(f'WORLD HEADING RESTORED | error_deg={math.degrees(error):.2f}')
-                return
-            steps = int(round(max(-250, min(250, error*1600))))
-            self._rotate_by_steps(held_positions, steps,
-                                  f'WORLD HEADING RESTORE | error_deg={math.degrees(error):.2f}')
-        raise GraspActionError('actual world heading did not converge; no new target selected')
+        current = self._identity.pose2d()
+        if current is None:
+            raise GraspActionError('world heading feedback lost during restoration')
+        self._drive_to_pose(
+            held_positions,
+            Pose2D(current.x, current.y, float(target_yaw)),
+            'RESTORE WORLD HEADING',
+            control_mode="yaw",
+        )
 
     def _restore_cycle_offsets(self, held_positions):
-        self._ignore_detections = True
-        self.detection_frames.clear()
-        self._publish_status("RESTORE CYCLE OFFSETS | vision detections ignored")
+        if self.task_state.state != SortingState.SAFE_STOP:
+            self.task_state.transition(SortingState.RETURN_HOME)
+        self._set_vision_enabled(False, "returning to cycle center")
+        self._publish_status("RESTORE CYCLE CENTER | separate position/yaw phases")
         try:
-            if self._placement_relative_steps:
-                self._rotate_by_steps(
-                    held_positions,
-                    -self._placement_relative_steps,
-                    "RESTORE HEADING AFTER PLACEMENT",
-                )
-                self._placement_relative_steps = 0
-            if self._forward_offset_active:
-                # Undo translation along the same actual heading used on approach.
-                # Encoder reversal alone can leave the chassis facing the zone.
-                self._restore_world_heading(held_positions, self._aligned_yaw)
-                self._move_chassis_linear(held_positions, forward=False)
-                self._forward_offset_active = False
-            if self._alignment_steps:
-                self._rotate_by_steps(
-                    held_positions,
-                    -self._alignment_steps,
-                    "RESTORE CAMERA OBSERVATION HEADING",
-                )
-                self._alignment_steps = 0
-            for correction in range(2):
-                residual_steps = self._turn_steps_from_wheel_positions(
-                    self._cycle_wheel_positions,
-                    self._wheel_positions(),
-                )
-                if residual_steps is None or abs(residual_steps) <= 1:
-                    break
-                self._rotate_by_steps(
-                    held_positions,
-                    -residual_steps,
-                    f"RESTORE ENCODER HEADING RESIDUAL {correction + 1}/2",
-                )
-            final_residual = self._turn_steps_from_wheel_positions(
-                self._cycle_wheel_positions,
-                self._wheel_positions(),
-            )
-            if final_residual is not None:
+            if self._cycle_pose is None:
+                raise GraspActionError("cycle start pose was not captured")
+            self._reverse_approach_corridor(held_positions)
+            if (
+                self._placement_return_pending
+                and self._placement_departure_pose is not None
+                and self._placement_heading is not None
+            ):
                 self._publish_status(
-                    "RESTORE HEADING COMPLETE | "
-                    f"encoder_residual_steps={final_residual}"
+                    "DIRECT REVERSE AFTER RELEASE | retrace placement corridor"
                 )
-            self._restore_world_heading(held_positions, self._cycle_yaw)
+                self._drive_to_pose(
+                    held_positions,
+                    self._placement_departure_pose,
+                    "REVERSE STRAIGHT FROM PLACEMENT ZONE",
+                    control_mode="straight",
+                    travel_yaw=self._placement_heading,
+                    arrival_tolerance=self.cycle_return_tolerance,
+                )
+                self._placement_return_pending = False
+            self._drive_to_pose(
+                held_positions,
+                self._cycle_pose,
+                "CONFIRM RETURN WITHIN CYCLE CENTER REGION",
+                allow_reverse=True,
+                control_mode="position",
+                arrival_tolerance=self.cycle_return_tolerance,
+            )
+            self._drive_to_pose(
+                held_positions,
+                self._cycle_pose,
+                "RETURN TO CYCLE YAW",
+                control_mode="yaw",
+            )
+            # Yaw-only skid steering may translate the chassis.  Close the
+            # loop on x, y and yaw together before permitting another image
+            # acquisition, so every cycle uses the same world-frame origin.
+            self._drive_to_pose(
+                held_positions,
+                self._cycle_pose,
+                "FINAL FIXED HOME POSE VERIFICATION",
+                allow_reverse=True,
+                control_mode="pose",
+            )
         finally:
-            self._cycle_wheel_positions = None
+            self._cycle_pose = None
+            self._placement_departure_pose = None
+            self._placement_heading = None
+            self._placement_return_pending = False
+            self._approach_departure_pose = None
+            self._approach_heading = None
+            self._approach_return_pending = False
             self.detection_frames.clear()
-            self._ignore_detections = False
 
     def run_action(self):
         if shutil.which("ros2") is None or shutil.which("ign") is None:
             raise GraspActionError("ros2 or ign not found; source the Team21 environment")
 
         self.get_logger().info(
-            "VISION SORTING | four neutral objects | bottle=right | tennis=left"
+            f"VISION SORTING | mode={self.scene_mode} | "
+            f"objects={self.run_count} | "
+            "bottle=right | tennis=left | chassis=world-pose feedback"
         )
         self._ensure_broadcaster()
         initial = self._wait_for_joint_state()
@@ -827,6 +1372,7 @@ class GraspBottleTennisAction(GraspCubeAction):
         self._wait_for_sim_time(after=previous_sim_time)
         self._write_ready_file(self.controller_ready_file)
         self._publish_status("ROBOT CONTROLLERS READY | continuous dynamic mode")
+        self.task_state.transition(SortingState.WAIT_SCENE)
 
         index = {name: i for i, name in enumerate(POSITION_JOINTS)}
         current = self._gripper_pose(initial, initial, index, opened=True)
@@ -843,25 +1389,85 @@ class GraspBottleTennisAction(GraspCubeAction):
             rclpy.spin_once(self, timeout_sec=0.1)
         if not self._identity.fresh():
             raise GraspActionError('Gazebo object identity poses unavailable; refusing untracked sorting')
+        self._sorting_home_pose = self._identity.pose2d()
+        if self._sorting_home_pose is None:
+            raise GraspActionError('cannot capture fixed world-frame sorting origin')
+        self._publish_status(
+            'FIXED SORTING HOME CAPTURED | '
+            f'x={self._sorting_home_pose.x:.4f} | '
+            f'y={self._sorting_home_pose.y:.4f} | '
+            f'yaw={math.degrees(self._sorting_home_pose.yaw):.2f} deg'
+        )
         self._publish_status('OBJECT IDENTITY READY | completed entities excluded from all detections')
+        self._set_vision_enabled(True, "initial detector handshake")
         self._wait_for_detector_stream()
+        self._set_vision_enabled(False, "waiting for first acquire phase")
+        self.task_state.transition(SortingState.ACQUIRE)
 
         success_count = 0
+        unknown_count = 0
+        empty_count = 0
+        processed_count = 0
         try:
-            while success_count < self.run_count:
+            while processed_count < self.run_count:
                 completed = False
                 for retry in range(self.max_grasp_retries + 1):
                     current = self._prepare_observation_pose(initial, current, index)
-                    self._cycle_wheel_positions = self._wheel_positions()
-                    self._cycle_yaw = self._identity.yaw()
-                    self._current_class = self._align_to_visual_target(current)
+                    # Never redefine home from the accumulated pose error of
+                    # the preceding round.  All six rounds share this one
+                    # immutable world-frame origin.
+                    self._cycle_pose = self._sorting_home_pose
+                    self._set_vision_enabled(
+                        True,
+                        f"acquire and align cycle {processed_count + 1}",
+                    )
+                    self.task_state.transition(SortingState.ALIGN)
+                    try:
+                        self._current_class = self._align_to_visual_target(current)
+                    except RetryableAcquisitionError as error:
+                        self._set_vision_enabled(False, "acquire phase ended")
+                        if self.scene_mode in {"unknown", "empty"} and str(
+                            error
+                        ).startswith("no stable"):
+                            consumed, unknown, empty = (
+                                self._record_unrecognized_or_empty(processed_count)
+                            )
+                            if consumed <= 0:
+                                raise
+                            processed_count += consumed
+                            unknown_count += unknown
+                            empty_count += empty
+                            self._cycle_pose = None
+                            self.task_state.transition(SortingState.RECORD)
+                            completed = True
+                            break
+                        current = list(self.last_position_command or current)
+                        self._publish_status(
+                            "VISION ALIGN RETRY | "
+                            f"reason={error} | action=return_fixed_home_reacquire | "
+                            "processed_count_unchanged=true"
+                        )
+                        self._restore_cycle_offsets(current)
+                        self._locked_object_id = None
+                        self._locked_object_origin = None
+                        self._current_class = None
+                        if retry < self.max_grasp_retries:
+                            self.task_state.transition(
+                                SortingState.ACQUIRE,
+                                "retry visual alignment from fixed home",
+                            )
+                            continue
+                        break
+                    self._set_vision_enabled(
+                        False,
+                        f"locked {self._locked_object_id}; motion phases own control",
+                    )
                     self._use_tennis_grasp = self._current_class == TENNIS
                     self.arm_2_delta = (
                         self.tennis_arm_2_delta
                         if self._use_tennis_grasp
                         else self.bottle_arm_2_delta
                     )
-                    self._placement_relative_steps = 0
                     mode = (
                         "LOW LEVEL HORIZONTAL TENNIS GRASP"
                         if self._use_tennis_grasp
@@ -871,9 +1477,27 @@ class GraspBottleTennisAction(GraspCubeAction):
                         f"OBJECT {success_count + 1}/{self.run_count} | retry={retry}/"
                         f"{self.max_grasp_retries} | class={self._current_class} | {mode}"
                     )
-                    if self._use_tennis_grasp:
-                        self._move_chassis_linear(current, forward=True)
-                        self._forward_offset_active = True
+                    try:
+                        self._approach_locked_object(current)
+                    except RetryableAcquisitionError as error:
+                        self._set_vision_enabled(False, "unsafe approach rejected")
+                        current = list(self.last_position_command or current)
+                        self._publish_status(
+                            "APPROACH RETRY | "
+                            f"reason={error} | action=return_fixed_home_reacquire | "
+                            "processed_count_unchanged=true"
+                        )
+                        self._restore_cycle_offsets(current)
+                        self._locked_object_id = None
+                        self._locked_object_origin = None
+                        self._current_class = None
+                        if retry < self.max_grasp_retries:
+                            self.task_state.transition(
+                                SortingState.ACQUIRE,
+                                "retry short approach from fixed home",
+                            )
+                            continue
+                        break
 
                     ok, current = self._run_once(
                         success_count + 1, initial, current, index
@@ -884,44 +1508,127 @@ class GraspBottleTennisAction(GraspCubeAction):
                         origin = self._locked_object_origin
                         moved = (placed is not None and origin is not None and
                                  math.hypot(placed[0]-origin[0], placed[1]-origin[1]) >= 0.08)
+                        in_zone = False
+                        zone_offset = None
+                        if placed is not None and self._cycle_pose is not None:
+                            zone_offset = lateral_offset(
+                                self._cycle_pose.x,
+                                self._cycle_pose.y,
+                                self._cycle_pose.yaw,
+                                placed[0],
+                                placed[1],
+                            )
+                            in_zone = in_classification_half(
+                                self._cycle_pose.x,
+                                self._cycle_pose.y,
+                                self._cycle_pose.yaw,
+                                placed[0],
+                                placed[1],
+                                left_half=self._current_class == TENNIS,
+                                margin=self.classification_zone_margin,
+                            )
                         if not moved:
                             ok = False
+                            self._last_attempt_failure = (
+                                "placement verification found no source displacement"
+                            )
                             self._publish_status('PLACEMENT NOT VERIFIED | target did not leave source; no count increment')
+                        elif not in_zone:
+                            ok = False
+                            self._last_attempt_failure = (
+                                "placement verification found object outside class half"
+                            )
+                            measured_text = (
+                                "unavailable"
+                                if zone_offset is None
+                                else f"{zone_offset:.3f} m"
+                            )
+                            self._publish_status(
+                                "PLACEMENT WRONG HALF | "
+                                f"class={self._current_class} | "
+                                f"left_axis_offset={measured_text} | "
+                                f"required_margin={self.classification_zone_margin:.3f} m"
+                            )
                         else:
                             self._identity.completed.add(self._locked_object_id)
+                            self._publish_status(
+                                f"CLASS HALF VERIFIED | class={self._current_class} | "
+                                f"left_axis_offset={zone_offset:.3f} m | "
+                                f"margin={self.classification_zone_margin:.3f} m"
+                            )
                             self._publish_status(f'OBJECT EXCLUDED | id={self._locked_object_id} | class={self._current_class}')
                     self._restore_cycle_offsets(current)
+                    self.task_state.transition(SortingState.RECORD)
                     if ok:
                         self.category_counts[self._current_class] += 1
                         success_count += 1
+                        processed_count += 1
                         completed = True
                         self._locked_object_id = None
                         self._locked_object_origin = None
                         self.detection_frames.clear()
                         self._publish_status(
                             "SORTED | "
-                            f"total={success_count}/{self.run_count} | bottles="
-                            f"{self.category_counts[BOTTLE]}/2 | tennis="
-                            f"{self.category_counts[TENNIS]}/2"
+                            f"processed={processed_count}/{self.run_count} | "
+                            f"sorted={success_count} | bottles="
+                            f"{self.category_counts[BOTTLE]}/"
+                            f"{self.expected_counts[BOTTLE]} | tennis="
+                            f"{self.category_counts[TENNIS]}/"
+                            f"{self.expected_counts[TENNIS]}"
                         )
                         break
-                    self._publish_status(
-                        f"EMPTY GRASP | retry {retry + 1}/"
-                        f"{self.max_grasp_retries + 1}"
+                    failure_reason = (
+                        self._last_attempt_failure or "attempt did not verify"
                     )
+                    self._locked_object_id = None
+                    self._locked_object_origin = None
+                    self._current_class = None
+                    self._use_tennis_grasp = False
+                    self.detection_frames.clear()
+                    self._publish_status(
+                        "ROUND RETRY | "
+                        f"reason={failure_reason} | "
+                        f"attempt={retry + 1}/{self.max_grasp_retries + 1} | "
+                        "returned_to_origin=true | reacquire=true | "
+                        "success_count_unchanged=true"
+                    )
+                    if retry < self.max_grasp_retries:
+                        self.task_state.transition(
+                            SortingState.ACQUIRE,
+                            "retry round with fresh visual acquisition",
+                        )
                 if not completed:
                     raise GraspActionError(
-                        "same target failed after two retries; refusing to guess or continue"
+                        "round failed after configured retries; refusing to guess or continue"
                     )
+                if processed_count < self.run_count:
+                    self.task_state.transition(SortingState.ACQUIRE)
 
-            if self.category_counts != {BOTTLE: 2, TENNIS: 2}:
+            recognized_categories = sum(
+                count > 0 for count in self.category_counts.values()
+            )
+            if success_count < self.minimum_success_count:
                 raise GraspActionError(
-                    f"unexpected final class counts: {self.category_counts}"
+                    f"only {success_count}/{self.run_count} objects were sorted; "
+                    f"minimum is {self.minimum_success_count}"
+                )
+            if self.require_two_categories and recognized_categories < 2:
+                raise GraspActionError(
+                    f"fewer than two categories were sorted: {self.category_counts}"
                 )
             self._publish_status(
-                "VISION SORTING COMPLETE | bottles=2 right | tennis=2 left | Gazebo pausing"
+                "VISION SORTING COMPLETE | "
+                f"sorted={success_count}/{self.run_count} | "
+                f"bottles={self.category_counts[BOTTLE]} right | "
+                f"tennis={self.category_counts[TENNIS]} left | "
+                f"unknown={unknown_count} | empty={empty_count} | "
+                "acceptance target reached | Gazebo pausing"
             )
-        except Exception:
+            self._set_vision_enabled(False, "sorting complete")
+            self.task_state.transition(SortingState.DONE)
+        except Exception as task_error:
+            self._set_vision_enabled(False, "task failure and safe recovery")
+            self.task_state.fail(task_error)
             current = list(self.last_position_command or current)
             try:
                 current = self._safe_home_pose(initial, current, index)

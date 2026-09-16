@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
+from pose_feedback import Pose2D
+
 
 def rotation(rpy):
     r, p, y = rpy
@@ -35,6 +37,7 @@ class SortingIdentity:
         self.poses = {}
         self.updated = 0.0
         self.completed = set()
+        self._lock = threading.Lock()
         self.process = subprocess.Popen(
             ['ign', 'topic', '-e', '--json-output', '-t', '/world/pick_place/pose/info'],
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
@@ -57,8 +60,9 @@ class SortingIdentity:
                 buffer = buffer[end:]
                 poses = {p.get('name'): p for p in message.get('pose', []) if p.get('name')}
                 if 'robomaster_ep_core' in poses:
-                    self.poses = poses
-                    self.updated = time.monotonic()
+                    with self._lock:
+                        self.poses = poses
+                        self.updated = time.monotonic()
 
     def close(self):
         self.process.terminate()
@@ -69,25 +73,61 @@ class SortingIdentity:
             self.process.wait(timeout=2)
 
     def fresh(self):
-        return time.monotonic() - self.updated < 2.0
+        _, updated = self._snapshot()
+        return time.monotonic() - updated < 2.0
+
+    def _snapshot(self):
+        """Return one internally consistent pose frame.
+
+        Unit tests in the original project instantiate this class with
+        ``__new__``.  The lock fallback keeps that lightweight pattern valid.
+        """
+        lock = getattr(self, '_lock', None)
+        if lock is None:
+            return dict(self.poses), float(self.updated)
+        with lock:
+            return dict(self.poses), float(self.updated)
 
     def position(self, name):
-        if not self.fresh() or name not in self.poses:
+        poses, updated = self._snapshot()
+        if time.monotonic() - updated >= 2.0 or name not in poses:
             return None
-        return np.array([self.poses[name].get('position', {}).get(k, 0.0) for k in ('x', 'y', 'z')])
+        return np.array([poses[name].get('position', {}).get(k, 0.0) for k in ('x', 'y', 'z')])
+
+    def active_task_objects(self):
+        """Return unprocessed neutral task entities from a fresh pose frame."""
+        poses, updated = self._snapshot()
+        if time.monotonic() - updated >= 2.0:
+            return []
+        return sorted(
+            name for name in poses
+            if name.startswith('task_object_') and name not in self.completed
+        )
 
     def yaw(self):
-        if not self.fresh():
+        pose = self.pose2d()
+        return None if pose is None else pose.yaw
+
+    def pose2d(self):
+        """Return the measured chassis world pose used by closed-loop motion."""
+        poses, updated = self._snapshot()
+        if time.monotonic() - updated >= 2.0:
             return None
-        pose = self.poses.get('robomaster_ep_core')
+        pose = poses.get('robomaster_ep_core')
         if pose is None:
             return None
+        position = pose.get('position', {})
         r = transform({}, pose.get('orientation', {}))
-        return math.atan2(r[1, 0], r[0, 0])
+        return Pose2D(
+            float(position.get('x', 0.0)),
+            float(position.get('y', 0.0)),
+            math.atan2(r[1, 0], r[0, 0]),
+        )
 
     def camera(self, joint_state):
-        poses = self.poses
-        if not self.fresh() or joint_state is None or 'robomaster_ep_core' not in poses:
+        poses, updated = self._snapshot()
+        if (time.monotonic() - updated >= 2.0 or joint_state is None
+                or 'robomaster_ep_core' not in poses):
             return None
         robot = poses['robomaster_ep_core']
         angles = dict(zip(joint_state.name, joint_state.position))
@@ -131,7 +171,8 @@ class SortingIdentity:
         sensor[:3,:3] = rotation([0, float(os.environ.get('TEAM21_CAMERA_SENSOR_PITCH', '-0.729922011')), 0])
         return matrices['camera_link'] @ sensor
 
-    def associate(self, detections, joint_state, intrinsic, locked=None, counts=None):
+    def associate(self, detections, joint_state, intrinsic, locked=None,
+                  counts=None, class_limits=None):
         camera = self.camera(joint_state)
         if camera is None:
             return []
@@ -166,7 +207,9 @@ class SortingIdentity:
             detection = detections[number]
             if name in self.completed or (locked is not None and name != locked):
                 continue
-            if counts is not None and counts.get(detection['class_name'], 0) >= 2:
+            if (counts is not None and class_limits is not None
+                    and counts.get(detection['class_name'], 0)
+                    >= class_limits.get(detection['class_name'], float('inf'))):
                 continue
             result.append(dict(detection, object_id=name))
         return result
