@@ -66,21 +66,28 @@ CONF_BALL = 0.35
 CONF_BOTTLE = 0.25
 
 # ==========================================================
-# Black square marker gate
+# Black rectangle marker gate
 # ==========================================================
 
 BLACK_GRAY_THRESHOLD = 60
 
-# Valid contour area for 640x360 image
-BLACK_MIN_AREA = 300
-BLACK_MAX_AREA = 20000
+# Vision-control implementation note
+BLACK_MIN_AREA = 250
+BLACK_MAX_AREA = 6500
 
-# Square-like width/height ratio
-BLACK_MIN_ASPECT = 0.75
-BLACK_MAX_ASPECT = 1.25
+# minAreaRect geometry constraint
+RECT_MIN_ASPECT = 1.0
+RECT_MAX_ASPECT = 2.60
 
-# Contour should substantially fill its bounding box
-BLACK_MIN_FILL_RATIO = 0.65
+# Vision-control implementation note
+RECT_MIN_RECTANGULARITY = 0.52
+
+# Vision-control implementation note
+RECT_MIN_SOLIDITY = 0.78
+
+# Vision-control implementation note
+RECT_MIN_CENTER_Y_RATIO = 0.50
+RECT_MAX_CENTER_Y_RATIO = 0.93
 
 
 # ==========================================================
@@ -167,6 +174,25 @@ CLOSE_LOOP_PERIOD_S = 0.10
 
 # 连续多久看不到有效目标才判定本轮近距跟踪失败
 CLOSE_LOST_TIMEOUT_S = 2.5
+
+
+# ==========================================================
+# Bottle CLOSE_APPROACH fallback
+# ==========================================================
+#
+# Vision-control implementation note
+#
+# CLOSE_APPROACH fallback / tracking logic
+# Bottle close-range fallback logic
+# YOLO gating / forced inference logic
+# Bottle close-range fallback logic
+#
+# Bottle close-range fallback logic
+#
+BOTTLE_CLOSE_LOST_GRASP_S = 1.2
+BOTTLE_CLOSE_MIN_FORWARD_M = 0.08
+BOTTLE_CLOSE_NEAR_HEIGHT = 260.0
+
 
 # 近距离阶段最大控制次数
 CLOSE_MAX_STEPS = 30
@@ -372,18 +398,23 @@ def apply_center_roi_mask(frame_bgr):
     return masked
 
 
-def detect_black_square(frame_bgr):
+def detect_black_rectangle(frame_bgr):
     """
-    Detect at least one black square marker.
+    Detect an approximate black rectangular marker.
 
-    The returned mask uses:
-        black marker in original image -> white
-        background -> black
+    Detect a loose black rectangular marker.
+    - Accept rotated rectangles.
+    - Allow moderate contour irregularity and occlusion.
+    - Use geometric and solidity constraints for filtering.
+    - Return the best valid marker candidate.
     """
 
     if frame_bgr is None or frame_bgr.size == 0:
         return False, None, None
 
+    # ------------------------------------------------------
+    # 1. grayscale
+    # ------------------------------------------------------
     gray = cv2.cvtColor(
         frame_bgr,
         cv2.COLOR_BGR2GRAY,
@@ -395,6 +426,9 @@ def detect_black_square(frame_bgr):
         0,
     )
 
+    # ------------------------------------------------------
+    # 2. black -> white binary mask
+    # ------------------------------------------------------
     _, mask = cv2.threshold(
         gray,
         BLACK_GRAY_THRESHOLD,
@@ -402,6 +436,9 @@ def detect_black_square(frame_bgr):
         cv2.THRESH_BINARY_INV,
     )
 
+    # ------------------------------------------------------
+    # 3. morphology
+    # ------------------------------------------------------
     kernel = np.ones(
         (3, 3),
         dtype=np.uint8,
@@ -421,6 +458,9 @@ def detect_black_square(frame_bgr):
         iterations=2,
     )
 
+    # ------------------------------------------------------
+    # 4. contours
+    # ------------------------------------------------------
     contour_result = cv2.findContours(
         mask,
         cv2.RETR_EXTERNAL,
@@ -437,10 +477,15 @@ def detect_black_square(frame_bgr):
     best_box = None
     best_area = 0.0
 
+    BORDER_MARGIN = 3
+
     for contour in contours:
 
         area = cv2.contourArea(contour)
 
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
         if area < BLACK_MIN_AREA:
             continue
 
@@ -452,56 +497,89 @@ def detect_black_square(frame_bgr):
         if w <= 0 or h <= 0:
             continue
 
-        # Ignore very large dark regions touching image edges
-        if x <= 2 or y <= 2:
+        center_y = y + h / 2.0
+
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
+        if x <= BORDER_MARGIN:
             continue
 
-        if x + w >= frame_w - 2:
+        if y <= BORDER_MARGIN:
             continue
 
-        if y + h >= frame_h - 2:
+        if x + w >= frame_w - BORDER_MARGIN:
             continue
 
-        aspect = float(w) / float(h)
-
-        if not (
-            BLACK_MIN_ASPECT
-            <= aspect
-            <= BLACK_MAX_ASPECT
-        ):
+        if y + h >= frame_h - BORDER_MARGIN:
             continue
 
-        perimeter = cv2.arcLength(
-            contour,
-            True,
-        )
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
+        center_y_ratio = center_y / float(frame_h)
 
-        if perimeter <= 0:
+        if center_y_ratio < RECT_MIN_CENTER_Y_RATIO:
             continue
 
-        approx = cv2.approxPolyDP(
-            contour,
-            0.04 * perimeter,
-            True,
-        )
-
-        # Require approximately four corners
-        if len(approx) != 4:
+        if center_y_ratio > RECT_MAX_CENTER_Y_RATIO:
             continue
 
-        if not cv2.isContourConvex(approx):
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
+        rot_rect = cv2.minAreaRect(contour)
+
+        (_, _), (rect_w, rect_h), angle = rot_rect
+
+        if rect_w <= 1.0 or rect_h <= 1.0:
             continue
 
-        rect_area = float(w * h)
+        long_side = max(rect_w, rect_h)
+        short_side = min(rect_w, rect_h)
 
-        if rect_area <= 0:
+        if short_side <= 0:
             continue
 
-        fill_ratio = area / rect_area
+        aspect = long_side / short_side
 
-        if fill_ratio < BLACK_MIN_FILL_RATIO:
+        if aspect < RECT_MIN_ASPECT:
             continue
 
+        if aspect > RECT_MAX_ASPECT:
+            continue
+
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
+        rotated_rect_area = rect_w * rect_h
+
+        if rotated_rect_area <= 0:
+            continue
+
+        rectangularity = area / rotated_rect_area
+
+        if rectangularity < RECT_MIN_RECTANGULARITY:
+            continue
+
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
+        hull = cv2.convexHull(contour)
+
+        hull_area = cv2.contourArea(hull)
+
+        if hull_area <= 0:
+            continue
+
+        solidity = area / hull_area
+
+        if solidity < RECT_MIN_SOLIDITY:
+            continue
+
+        # --------------------------------------------------
+        # Vision-control implementation note
+        # --------------------------------------------------
         if area > best_area:
             best_area = area
             best_box = (x, y, w, h)
@@ -513,7 +591,13 @@ def detect_black_square(frame_bgr):
     )
 
 
-def detect_one_frame(model, frame_bgr, target, use_cuda):
+def detect_one_frame(
+    model,
+    frame_bgr,
+    target,
+    use_cuda,
+    force_yolo=False,
+):
     # ------------------------------------------------------
     # Camera ROI:
     # only the middle 50% is visible to BOTH marker detection
@@ -526,11 +610,21 @@ def detect_one_frame(model, frame_bgr, target, use_cuda):
     # Global YOLO switch:
     # only run object detection if a black square exists
     # inside the active center ROI.
-    marker_found, _, _ = detect_black_square(
+    marker_found, _, _ = detect_black_rectangle(
         vision_frame
     )
 
-    if not marker_found:
+    # ------------------------------------------------------
+    # Marker gate + YOLO latch
+    #
+    # Vision-control implementation note
+    # YOLO gating / forced inference logic
+    #
+    # Vision-control implementation note
+    #   force_yolo=True
+    # YOLO gating / forced inference logic
+    # ------------------------------------------------------
+    if (not marker_found) and (not force_yolo):
         return None, []
 
     imgsz, conf = infer_config(target)
@@ -664,6 +758,14 @@ class AsyncVision:
         self.status = "starting..."
         self.profile = None
 
+        # False:
+        # Marker gate behavior
+        #
+        # True:
+        # Vision-control implementation note
+        # YOLO gating / forced inference logic
+        self.force_yolo = False
+
         self.capture_meter = FPSMeter()
         self.infer_meter = FPSMeter()
         self.display_meter = FPSMeter()
@@ -677,6 +779,21 @@ class AsyncVision:
     def get_target(self):
         with self.state_lock:
             return self.target
+
+    def set_force_yolo(self, enabled):
+        """
+        enabled=False:
+            Use the normal black-marker YOLO gate.
+
+        enabled=True:
+            Bypass the marker gate and keep YOLO inference enabled.
+        """
+        with self.state_lock:
+            self.force_yolo = bool(enabled)
+
+    def get_force_yolo(self):
+        with self.state_lock:
+            return bool(self.force_yolo)
 
     def set_profile(self, profile):
         with self.state_lock:
@@ -779,6 +896,7 @@ class AsyncVision:
             last_run = time.monotonic()
 
             target = self.get_target()
+            force_yolo = self.get_force_yolo()
 
             try:
                 best, detections = detect_one_frame(
@@ -786,6 +904,7 @@ class AsyncVision:
                     frame_bgr=frame,
                     target=target,
                     use_cuda=self.use_cuda,
+                    force_yolo=force_yolo,
                 )
 
             except Exception as e:
@@ -872,7 +991,7 @@ class AsyncVision:
                     shown = vision_frame.copy()
 
                     marker_found, marker_mask, marker_box = (
-                        detect_black_square(vision_frame)
+                        detect_black_rectangle(vision_frame)
                     )
 
                     if marker_mask is not None:
@@ -895,7 +1014,7 @@ class AsyncVision:
 
                         cv2.putText(
                             shown,
-                            "BLACK MARKER - YOLO ENABLED",
+                            "RECTANGLE FOUND - YOLO ENABLED",
                             (10, 30),
                             cv2.FONT_HERSHEY_SIMPLEX,
                             0.6,
@@ -1330,6 +1449,11 @@ def close_approach(
     lost_since = None
     step = 0
 
+    # bottle CLOSE fallback state
+    bottle_forward_m = 0.0
+    bottle_near_seen = False
+    bottle_lost_since = None
+
     while step < CLOSE_MAX_STEPS:
         if vision.is_stopped():
             raise KeyboardInterrupt
@@ -1345,17 +1469,24 @@ def close_approach(
         )
 
         if loc is None:
+            now = time.monotonic()
+
+            # ==============================================
+            # Vision-control implementation note
+            # ==============================================
             if lost_since is None:
-                lost_since = time.monotonic()
+                lost_since = now
 
-            lost_time = time.monotonic() - lost_since
-
-            print(
-                f"[CLOSE] 暂无新鲜 {cls} 检测，"
-                f"等待中 {lost_time:.1f}s"
+            lost_time = (
+                now - lost_since
             )
 
-            # 没有新鲜目标时确保底盘停止
+            print(
+                f"[CLOSE] No fresh {cls} detection, "
+                f"waiting {lost_time:.1f}s"
+            )
+
+            # Vision-control implementation note
             try:
                 chassis.drive_speed(
                     x=0,
@@ -1366,17 +1497,162 @@ def close_approach(
             except Exception:
                 pass
 
-            if lost_time >= CLOSE_LOST_TIMEOUT_S:
+            # ==============================================
+            # Vision-control implementation note
+            # ==============================================
+
+            (
+                _,
+                latest_det_time,
+                _,
+                latest_detections,
+            ) = vision.snapshot()
+
+            inference_fresh = (
+                latest_det_time > 0
+                and (
+                    now - latest_det_time
+                    <= MAX_DET_AGE_S
+                )
+            )
+
+            bottle_present_now = any(
+                d["class"] == "bottle"
+                for d in latest_detections
+            )
+
+            # ==============================================
+            # Vision-control implementation note
+            #
+            # YOLO gating / forced inference logic
+            # +
+            # Bottle close-range fallback logic
+            #
+            # Bottle close-range fallback logic
+            #
+            # Vision-control implementation note
+            # Vision-control implementation note
+            # ==============================================
+
+            if (
+                cls == "bottle"
+                and inference_fresh
+                and not bottle_present_now
+            ):
+                if bottle_lost_since is None:
+                    bottle_lost_since = now
+
+                bottle_no_det_time = (
+                    now
+                    - bottle_lost_since
+                )
+
+            else:
+                bottle_lost_since = None
+                bottle_no_det_time = 0.0
+
+            if cls == "bottle":
                 print(
-                    "[CLOSE] 目标丢失超过限制，退出近距离闭环。"
+                    "[BOTTLE CLOSE FALLBACK] "
+                    f"fresh={inference_fresh}, "
+                    f"present={bottle_present_now}, "
+                    f"lost={bottle_no_det_time:.2f}s, "
+                    f"forward="
+                    f"{bottle_forward_m*100:.1f}cm, "
+                    f"near={bottle_near_seen}"
+                )
+
+            # ==============================================
+            # Bottle fallback
+            # ==============================================
+
+            if (
+                cls == "bottle"
+                and bottle_near_seen
+                and (
+                    bottle_forward_m
+                    >= BOTTLE_CLOSE_MIN_FORWARD_M
+                )
+                and (
+                    bottle_no_det_time
+                    >= BOTTLE_CLOSE_LOST_GRASP_S
+                )
+            ):
+                print()
+                print(
+                    "=============================================="
+                )
+                print(
+                    "[BOTTLE CLOSE FALLBACK] "
+                    "Triggering near-gripper fallback"
+                )
+                print(
+                    f"Forward distance: "
+                    f"{bottle_forward_m*100:.1f}cm"
+                )
+                print(
+                    f"Fresh inference without bottle: "
+                    f"{bottle_no_det_time:.2f}s"
+                )
+                print(
+                    "Bottle was previously confirmed near the gripper."
+                )
+                print(
+                    "Continue with normal gripper close and status check."
+                )
+                print(
+                    "=============================================="
+                )
+
+                vision.set_status(
+                    "BOTTLE LOST NEAR GRIPPER / FORCE GRASP"
+                )
+
+                # Vision-control implementation note
+                #
+                # Vision-control implementation note
+                #
+                # if loc is not None:
+                #     return cls, profile
+                #
+                # Vision-control implementation note
+                # close_and_lift()
+                #
+                return {
+                    "class": "bottle",
+                    "_force_grasp": True,
+                    "_reason":
+                        "lost_near_gripper",
+                    "_forward_m":
+                        bottle_forward_m,
+                    "_lost_s":
+                        bottle_no_det_time,
+                }
+
+            # ==============================================
+            # Vision-control implementation note
+            # ==============================================
+
+            if (
+                lost_time
+                >= CLOSE_LOST_TIMEOUT_S
+            ):
+                print(
+                    "[CLOSE] Target lost beyond timeout, "
+                    "exit close approach."
                 )
                 return None
 
-            time.sleep(CLOSE_LOOP_PERIOD_S)
+            time.sleep(
+                CLOSE_LOOP_PERIOD_S
+            )
             continue
 
-        # 当前有新鲜框
+        # Vision-control implementation note
         lost_since = None
+
+        # Bottle close-range fallback logic
+        bottle_lost_since = None
         step += 1
 
         x_error = loc["bottom_x"] - ref_x
@@ -1384,6 +1660,21 @@ def close_approach(
 
         if cls == "bottle":
             current_size = float(loc["height"])
+
+            # Bottle close-range fallback logic
+            if (
+                current_size
+                >= BOTTLE_CLOSE_NEAR_HEIGHT
+            ):
+                if not bottle_near_seen:
+                    print(
+                        "[BOTTLE CLOSE FALLBACK] "
+                        f"Near bottle confirmed: "
+                        f"height={current_size:.1f}px"
+                    )
+
+                bottle_near_seen = True
+
         else:
             current_size = float(loc["width"])
 
@@ -1515,6 +1806,23 @@ def close_approach(
                 z=0,
                 xy_speed=CHASSIS_XY_SPEED,
             ).wait_for_completed()
+
+            # ==============================================
+            # CLOSE_APPROACH fallback / tracking logic
+            # Bottle close-range fallback logic
+            #
+            # Vision-control implementation note
+            # ==============================================
+
+            if dx > 0:
+                bottle_forward_m += float(dx)
+
+                print(
+                    "[BOTTLE CLOSE FALLBACK] "
+                    f"forward="
+                    f"{bottle_forward_m*100:.1f}cm, "
+                    f"near={bottle_near_seen}"
+                )
 
             time.sleep(0.18)
             continue
@@ -1884,6 +2192,21 @@ def approach_in_observe_pose(
                     stop_chassis_smooth(chassis, current_x, current_z)
                     return None, None, None
                 vision.set_target(locked_class)
+
+                # --------------------------------------------------
+                # Target lock:
+                # Vision-control implementation note
+                #
+                # CLOSE_APPROACH fallback / tracking logic
+                # YOLO gating / forced inference logic
+                # --------------------------------------------------
+                vision.set_force_yolo(True)
+
+                print(
+                    "[VISION] TARGET LOCKED -> "
+                    "YOLO FORCE ON / MARKER GATE BYPASSED"
+                )
+
                 print(
                     f"[SMOOTH] 锁定最近目标: {locked_class}，"
                     "后续持续跟踪该物体"
@@ -2574,6 +2897,19 @@ def return_search_and_scan(
     print("============================================================")
     print("[RETURN_SEARCH] 恢复搜索位置并扫描剩余目标")
     print("============================================================")
+
+    # ------------------------------------------------------
+    # Vision-control implementation note
+    #
+    # Vision-control implementation note
+    # Marker gate behavior
+    # ------------------------------------------------------
+    vision.set_force_yolo(False)
+
+    print(
+        "[VISION] RETURN_SEARCH -> "
+        "YOLO FORCE OFF / MARKER GATE RESTORED"
+    )
 
     vision.set_status("RETURN_SEARCH / OBSERVE POSE")
 
