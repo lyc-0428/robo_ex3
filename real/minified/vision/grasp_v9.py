@@ -193,6 +193,10 @@ BOTTLE_CLOSE_LOST_GRASP_S = 1.2
 BOTTLE_CLOSE_MIN_FORWARD_M = 0.08
 BOTTLE_CLOSE_NEAR_HEIGHT = 260.0
 
+# Hard safety ceiling for bottle CLOSE_APPROACH.
+# Normal visual READY can still stop much earlier.
+BOTTLE_CLOSE_MAX_FORWARD_M = 0.30
+
 
 # 近距离阶段最大控制次数
 CLOSE_MAX_STEPS = 30
@@ -274,6 +278,36 @@ DROP_OPEN_TIME = 1.0
 # 先后退恢复更宽视野，再做左/中/右扫描。
 RETURN_BACK_M = 0.25
 RETURN_BACK_SPEED = 0.18
+
+# ==========================================================
+# Lateral search / lateral drop
+# ==========================================================
+
+# RoboMaster EP:
+#   y < 0 -> move left
+#   y > 0 -> move right
+SEARCH_STRAFE_SPEED = 0.12
+DROP_STRAFE_SPEED = 0.12
+
+# Marker must remain absent for this long before
+# an edge is considered reached.
+SEARCH_MARKER_LOST_S = 1.0
+DROP_MARKER_LOST_S = 1.0
+
+# Marker data older than this is not trusted.
+MARKER_STATE_MAX_AGE_S = 0.60
+
+# If marker updates disappear completely, stop for safety.
+MARKER_SENSOR_TIMEOUT_S = 1.50
+
+# Safety limit for one continuous lateral run.
+LATERAL_MAX_RUN_S = 12.0
+
+# Target confirmation while lateral searching.
+SEARCH_CONFIRM_TIMEOUT_S = 0.80
+SEARCH_CONFIRM_WINDOW = 4
+SEARCH_CONFIRM_HITS = 2
+
 
 # 扫描角度（chassis.move）
 # 当前实机 move()：左转为正，右转为负。
@@ -754,6 +788,12 @@ class AsyncVision:
         self.det_seq = 0
         self.det_time = 0.0
 
+        # Marker state used by lateral search/drop control.
+        self.marker_lock = threading.Lock()
+        self.marker_found = False
+        self.marker_seq = 0
+        self.marker_time = 0.0
+
         self.state_lock = threading.Lock()
         self.status = "starting..."
         self.profile = None
@@ -895,6 +935,20 @@ class AsyncVision:
             last_frame_seq = frame_seq
             last_run = time.monotonic()
 
+            # Full original 640x360 frame is used for
+            # lateral search/drop boundary detection.
+            #
+            # YOLO marker gating remains center-ROI based
+            # inside detect_one_frame().
+            marker_found, _, _ = detect_black_rectangle(
+                frame
+            )
+
+            with self.marker_lock:
+                self.marker_found = bool(marker_found)
+                self.marker_seq += 1
+                self.marker_time = time.monotonic()
+
             target = self.get_target()
             force_yolo = self.get_force_yolo()
 
@@ -943,6 +997,14 @@ class AsyncVision:
     def current_det_seq(self):
         with self.det_lock:
             return self.det_seq
+
+    def marker_snapshot(self):
+        with self.marker_lock:
+            return (
+                self.marker_seq,
+                self.marker_time,
+                bool(self.marker_found),
+            )
 
     def _display_loop(self):
         period = 1.0 / self.display_fps
@@ -1800,6 +1862,69 @@ def close_approach(
             if args.dry_run:
                 return loc
 
+            # --------------------------------------------------
+            # Bottle forward-distance hard safety guard.
+            # --------------------------------------------------
+            if dx > 0:
+                remaining_forward = (
+                    BOTTLE_CLOSE_MAX_FORWARD_M
+                    - bottle_forward_m
+                )
+
+                if remaining_forward <= 0.001:
+                    try:
+                        chassis.drive_speed(
+                            x=0,
+                            y=0,
+                            z=0,
+                            timeout=0.5,
+                        )
+                    except Exception:
+                        pass
+
+                    print()
+                    print(
+                        "=============================================="
+                    )
+                    print(
+                        "[BOTTLE SAFETY] CLOSE forward limit reached."
+                    )
+                    print(
+                        f"Forward distance = "
+                        f"{bottle_forward_m:.3f} m"
+                    )
+                    print(
+                        "No additional forward motion is allowed."
+                    )
+                    print(
+                        "Proceed directly to gripper close/judge."
+                    )
+                    print(
+                        "=============================================="
+                    )
+
+                    vision.set_status(
+                        "BOTTLE 0.30M LIMIT / FORCE GRASP"
+                    )
+
+                    return {
+                        "class": "bottle",
+                        "_force_grasp": True,
+                        "_reason": "forward_limit",
+                        "_forward_m": bottle_forward_m,
+                    }
+
+                # Clamp the final forward step so even the last
+                # chassis.move cannot cross the 0.30 m ceiling.
+                if dx > remaining_forward:
+                    print(
+                        "[BOTTLE SAFETY] Clamp final forward "
+                        f"step from {dx:.3f}m "
+                        f"to {remaining_forward:.3f}m"
+                    )
+
+                    dx = remaining_forward
+
             chassis.move(
                 x=float(dx),
                 y=0,
@@ -1816,6 +1941,49 @@ def close_approach(
 
             if dx > 0:
                 bottle_forward_m += float(dx)
+
+                if (
+                    bottle_forward_m
+                    >= BOTTLE_CLOSE_MAX_FORWARD_M - 0.001
+                ):
+                    try:
+                        chassis.drive_speed(
+                            x=0,
+                            y=0,
+                            z=0,
+                            timeout=0.5,
+                        )
+                    except Exception:
+                        pass
+
+                    print()
+                    print(
+                        "=============================================="
+                    )
+                    print(
+                        "[BOTTLE SAFETY] 0.30 m forward ceiling reached."
+                    )
+                    print(
+                        f"Forward distance = "
+                        f"{bottle_forward_m:.3f} m"
+                    )
+                    print(
+                        "Stop chassis and attempt grasp now."
+                    )
+                    print(
+                        "=============================================="
+                    )
+
+                    vision.set_status(
+                        "BOTTLE 0.30M LIMIT / FORCE GRASP"
+                    )
+
+                    return {
+                        "class": "bottle",
+                        "_force_grasp": True,
+                        "_reason": "forward_limit",
+                        "_forward_m": bottle_forward_m,
+                    }
 
                 print(
                     "[BOTTLE CLOSE FALLBACK] "
@@ -2851,25 +3019,233 @@ def close_and_lift(
 
 
 
-def _scan_detect_current_view(
-    vision,
-    timeout=SCAN_DETECT_TIMEOUT_S,
-):
-    """
-    当前朝向下快速判断是否有目标。
-    扫描阶段只要求较宽松的 2/5 命中，
-    目的是决定“下一轮搜索应该朝哪个方向”，不是直接抓。
-    """
-    vision.set_target("auto")
+def _stop_chassis_now(chassis):
+    try:
+        chassis.drive_speed(
+            x=0,
+            y=0,
+            z=0,
+            timeout=0.5,
+        )
+    except Exception:
+        pass
 
-    loc = locate_stable(
-        vision,
-        timeout=timeout,
-        window_size=SCAN_WINDOW,
-        required_hits=SCAN_HITS,
+
+def _fresh_search_candidate(vision):
+    _, det_time, _, detections = vision.snapshot()
+
+    if det_time <= 0:
+        return None
+
+    if (
+        time.monotonic() - det_time
+        > MAX_DET_AGE_S
+    ):
+        return None
+
+    return _priority_pick(
+        detections,
+        previous=None,
     )
 
-    return loc
+
+def _confirm_search_target(vision):
+    return locate_stable(
+        vision,
+        timeout=SEARCH_CONFIRM_TIMEOUT_S,
+        window_size=SEARCH_CONFIRM_WINDOW,
+        required_hits=SEARCH_CONFIRM_HITS,
+    )
+
+
+def _run_lateral_search_pass(
+    chassis,
+    vision,
+    y_speed,
+    pass_name,
+):
+    """
+    Move laterally while searching.
+
+    Returns:
+        ("TARGET", loc)
+        ("EDGE", None)
+        ("SENSOR_TIMEOUT", None)
+        ("MAX_RUN", None)
+    """
+
+    print()
+    print(
+        f"[LATERAL SEARCH] {pass_name}: "
+        f"y={y_speed:+.2f}m/s"
+    )
+
+    vision.set_status(
+        f"LATERAL SEARCH / {pass_name}"
+    )
+
+    start_time = time.monotonic()
+
+    marker_lost_since = None
+    marker_stale_since = None
+
+    last_marker_seq = -1
+    last_det_seq = -1
+
+    while True:
+        if vision.is_stopped():
+            raise KeyboardInterrupt
+
+        now = time.monotonic()
+
+        # --------------------------------------------------
+        # First check whether YOLO has found an object.
+        # --------------------------------------------------
+        det_seq, det_time, _, detections = (
+            vision.snapshot()
+        )
+
+        if det_seq != last_det_seq:
+            last_det_seq = det_seq
+
+            det_fresh = (
+                det_time > 0
+                and (
+                    now - det_time
+                    <= MAX_DET_AGE_S
+                )
+            )
+
+            if det_fresh and detections:
+                candidate = _priority_pick(
+                    detections,
+                    previous=None,
+                )
+
+                if candidate is not None:
+                    print(
+                        f"[LATERAL SEARCH] Candidate: "
+                        f"{candidate['class']} "
+                        f"bottom_y="
+                        f"{candidate['bottom_y']:.1f}"
+                    )
+
+                    _stop_chassis_now(chassis)
+
+                    confirmed = _confirm_search_target(
+                        vision
+                    )
+
+                    if confirmed is not None:
+                        print(
+                            f"[LATERAL SEARCH] TARGET FOUND: "
+                            f"{confirmed['class']} "
+                            f"bottom_y="
+                            f"{confirmed['bottom_y']:.1f}"
+                        )
+
+                        vision.set_status(
+                            "LATERAL SEARCH / TARGET FOUND"
+                        )
+
+                        return "TARGET", confirmed
+
+                    print(
+                        "[LATERAL SEARCH] Candidate not "
+                        "stable; resume strafe."
+                    )
+
+        # --------------------------------------------------
+        # Marker boundary detection.
+        # --------------------------------------------------
+        (
+            marker_seq,
+            marker_time,
+            marker_found,
+        ) = vision.marker_snapshot()
+
+        marker_fresh = (
+            marker_time > 0
+            and (
+                now - marker_time
+                <= MARKER_STATE_MAX_AGE_S
+            )
+        )
+
+        if marker_fresh:
+            marker_stale_since = None
+
+            if marker_seq != last_marker_seq:
+                last_marker_seq = marker_seq
+
+                if marker_found:
+                    marker_lost_since = None
+
+                elif marker_lost_since is None:
+                    marker_lost_since = now
+
+            if marker_found:
+                marker_lost_since = None
+
+        else:
+            marker_lost_since = None
+
+            if marker_stale_since is None:
+                marker_stale_since = now
+
+            if (
+                now - marker_stale_since
+                >= MARKER_SENSOR_TIMEOUT_S
+            ):
+                _stop_chassis_now(chassis)
+
+                print(
+                    "[LATERAL SEARCH] Marker sensor "
+                    "became stale. Stop."
+                )
+
+                return "SENSOR_TIMEOUT", None
+
+        # --------------------------------------------------
+        # Continuous marker absence -> edge reached.
+        # --------------------------------------------------
+        if marker_lost_since is not None:
+            lost_for = now - marker_lost_since
+
+            if lost_for >= SEARCH_MARKER_LOST_S:
+                _stop_chassis_now(chassis)
+
+                print(
+                    f"[LATERAL SEARCH] Marker absent "
+                    f"for {lost_for:.2f}s -> EDGE"
+                )
+
+                return "EDGE", None
+
+        # --------------------------------------------------
+        # Mechanical safety limit.
+        # --------------------------------------------------
+        if (
+            now - start_time
+            >= LATERAL_MAX_RUN_S
+        ):
+            _stop_chassis_now(chassis)
+
+            print(
+                "[LATERAL SEARCH] Max lateral run "
+                "time reached. Stop."
+            )
+
+            return "MAX_RUN", None
+
+        chassis.drive_speed(
+            x=0,
+            y=float(y_speed),
+            z=0,
+            timeout=0.5,
+        )
+
+        time.sleep(0.05)
 
 
 def return_search_and_scan(
@@ -2878,32 +3254,28 @@ def return_search_and_scan(
     vision,
 ):
     """
-    每次分类放置后执行：
+    New search strategy:
 
-        1. 机械臂回高位观察姿态
-        2. 向后退固定距离，恢复较宽视野
-        3. 中间视角检测
-        4. 左转约25°检测
-        5. 右扫约50°到右侧检测
-        6. 根据三个视角中“视觉上最近”的目标，
-           最后把车朝向那个视角
-        7. 下一轮从这个方向重新做最近目标选择
-
-    注意：
-    这里不是严格回放原路径，而是“恢复搜索视野 + 主动重观测”。
-    这比抓完后停在靠前位置直接继续识别更稳。
+    1. Restore observe pose.
+    2. Back up to recover a wider view.
+    3. Search while strafing LEFT.
+    4. If the black marker is absent continuously,
+       reverse and search RIGHT.
+    5. If the marker is absent continuously again,
+       stop and return IDLE.
     """
-    print()
-    print("============================================================")
-    print("[RETURN_SEARCH] 恢复搜索位置并扫描剩余目标")
-    print("============================================================")
 
-    # ------------------------------------------------------
-    # Vision-control implementation note
-    #
-    # Vision-control implementation note
-    # Marker gate behavior
-    # ------------------------------------------------------
+    print()
+    print(
+        "============================================================"
+    )
+    print(
+        "[RETURN_SEARCH] Lateral search for remaining targets"
+    )
+    print(
+        "============================================================"
+    )
+
     vision.set_force_yolo(False)
 
     print(
@@ -2911,19 +3283,23 @@ def return_search_and_scan(
         "YOLO FORCE OFF / MARKER GATE RESTORED"
     )
 
-    vision.set_status("RETURN_SEARCH / OBSERVE POSE")
+    vision.set_status(
+        "RETURN_SEARCH / OBSERVE POSE"
+    )
 
     move_arm_to_observe_pose(arm)
 
     vision.set_target("auto")
     vision.set_profile(None)
 
-    # 1) 后退，扩大视野
-    vision.set_status("RETURN_SEARCH / BACK UP")
+    # Recover wider view after the previous grasp.
+    vision.set_status(
+        "RETURN_SEARCH / BACK UP"
+    )
 
     print(
-        f"[RETURN_SEARCH] 后退 {RETURN_BACK_M*100:.0f}cm，"
-        "恢复更完整的目标视野"
+        f"[RETURN_SEARCH] Back up "
+        f"{RETURN_BACK_M*100:.0f}cm"
     )
 
     chassis.move(
@@ -2935,146 +3311,273 @@ def return_search_and_scan(
 
     time.sleep(0.35)
 
-    candidates = []
-
-    # 2) 中间视角
-    vision.set_status("SCAN / CENTER")
-    time.sleep(SCAN_SETTLE_S)
-
-    center = _scan_detect_current_view(vision)
-
-    if center is not None:
-        candidates.append(("CENTER", 0.0, center))
-        print(
-            f"[SCAN] CENTER: {center['class']} "
-            f"bottom_y={center['bottom_y']:.1f}"
-        )
-    else:
-        print("[SCAN] CENTER: no target")
-
-    # 3) 左侧视角
-    vision.set_status("SCAN / LEFT")
-    print(f"[SCAN] 左转 {SCAN_LEFT_DEG:.0f}deg")
-
-    chassis.move(
-        x=0,
-        y=0,
-        z=SCAN_LEFT_DEG,
-        z_speed=SCAN_Z_SPEED,
-    ).wait_for_completed()
-
-    time.sleep(SCAN_SETTLE_S)
-
-    left = _scan_detect_current_view(vision)
-
-    if left is not None:
-        candidates.append(("LEFT", SCAN_LEFT_DEG, left))
-        print(
-            f"[SCAN] LEFT: {left['class']} "
-            f"bottom_y={left['bottom_y']:.1f}"
-        )
-    else:
-        print("[SCAN] LEFT: no target")
-
-    # 4) 从左侧扫到右侧：总共右转50度
-    vision.set_status("SCAN / RIGHT")
-    sweep_to_right = SCAN_RIGHT_DEG - SCAN_LEFT_DEG
-
-    print(
-        f"[SCAN] 从左侧扫到右侧 {sweep_to_right:+.0f}deg"
+    # First check the current stationary view.
+    initial = _fresh_search_candidate(
+        vision
     )
 
-    chassis.move(
-        x=0,
-        y=0,
-        z=sweep_to_right,
-        z_speed=SCAN_Z_SPEED,
-    ).wait_for_completed()
+    if initial is not None:
+        _stop_chassis_now(chassis)
 
-    time.sleep(SCAN_SETTLE_S)
+        confirmed = _confirm_search_target(
+            vision
+        )
 
-    right = _scan_detect_current_view(vision)
+        if confirmed is not None:
+            print(
+                f"[LATERAL SEARCH] Target already "
+                f"visible: {confirmed['class']}"
+            )
 
-    if right is not None:
-        candidates.append(("RIGHT", SCAN_RIGHT_DEG, right))
+            return "TARGET"
+
+    # ------------------------------------------------------
+    # Pass 1: LEFT
+    #
+    # RoboMaster EP official coordinate convention:
+    # negative y = left.
+    # ------------------------------------------------------
+    state, loc = _run_lateral_search_pass(
+        chassis=chassis,
+        vision=vision,
+        y_speed=-SEARCH_STRAFE_SPEED,
+        pass_name="LEFT PASS",
+    )
+
+    if state == "TARGET":
+        return "TARGET"
+
+    if state != "EDGE":
         print(
-            f"[SCAN] RIGHT: {right['class']} "
-            f"bottom_y={right['bottom_y']:.1f}"
+            f"[LATERAL SEARCH] Abort search: {state}"
+        )
+        return "IDLE"
+
+    # ------------------------------------------------------
+    # First marker-loss boundary reached.
+    # Reverse direction exactly once.
+    # ------------------------------------------------------
+    print()
+    print(
+        "[LATERAL SEARCH] First edge reached -> "
+        "switch to RIGHT"
+    )
+
+    time.sleep(0.25)
+
+    state, loc = _run_lateral_search_pass(
+        chassis=chassis,
+        vision=vision,
+        y_speed=SEARCH_STRAFE_SPEED,
+        pass_name="RIGHT PASS",
+    )
+
+    if state == "TARGET":
+        return "TARGET"
+
+    _stop_chassis_now(chassis)
+
+    if state == "EDGE":
+        print()
+        print(
+            "============================================================"
+        )
+        print(
+            "[LATERAL SEARCH] Second edge reached."
+        )
+        print(
+            "[LATERAL SEARCH] No target found after one "
+            "direction change."
+        )
+        print(
+            "[LATERAL SEARCH] Robot stops here; "
+            "program stays alive."
+        )
+        print(
+            "============================================================"
         )
     else:
-        print("[SCAN] RIGHT: no target")
+        print(
+            f"[LATERAL SEARCH] Search stopped: {state}"
+        )
 
-    if not candidates:
-        # 没找到目标，回正等待下一轮搜索
-        print("[SCAN] 左/中/右都没发现稳定目标，回正。")
+    vision.set_status(
+        "IDLE / NO TARGET / PROGRAM ALIVE"
+    )
 
-        chassis.move(
-            x=0,
-            y=0,
-            z=-SCAN_RIGHT_DEG,
-            z_speed=SCAN_Z_SPEED,
-        ).wait_for_completed()
+    return "IDLE"
 
-        time.sleep(0.30)
 
-        vision.set_status("SCAN COMPLETE / NO TARGET")
-        return None
+def _hold_program_idle(
+    chassis,
+    vision,
+    reason,
+):
+    """
+    Keep the program alive without moving the robot.
+    Ctrl+C, Q or ESC can still terminate normally.
+    """
 
-    # 5) 三个视角里选择“视觉上最近”的目标
-    # 主优先：bottom_y；次优先：目标视觉面积。
-    best_view, best_angle, best_loc = max(
-        candidates,
-        key=lambda item: (
-            item[2]["bottom_y"],
-            item[2]["width"] * item[2]["height"],
-            item[2]["conf"],
-        ),
+    _stop_chassis_now(chassis)
+
+    vision.set_status(
+        "IDLE / STOPPED / PROGRAM ALIVE"
     )
 
     print()
     print(
-        f"[SCAN] 下一轮推荐方向: {best_view}, "
-        f"target={best_loc['class']}, "
-        f"bottom_y={best_loc['bottom_y']:.1f}"
+        "============================================================"
+    )
+    print(
+        "[IDLE] Robot stopped. Program remains running."
+    )
+    print(
+        f"[IDLE] Reason: {reason}"
+    )
+    print(
+        "[IDLE] Press Ctrl+C, Q or ESC to terminate."
+    )
+    print(
+        "============================================================"
     )
 
-    # 当前车头在 RIGHT(-25°)。
-    # 转到所选视角的绝对相对角度。
-    current_angle = SCAN_RIGHT_DEG
-    correction = best_angle - current_angle
-
-    if abs(correction) > 0.5:
-        print(
-            f"[SCAN] 调整到 {best_view} 视角: "
-            f"{correction:+.1f}deg"
-        )
-
-        chassis.move(
-            x=0,
-            y=0,
-            z=float(correction),
-            z_speed=SCAN_Z_SPEED,
-        ).wait_for_completed()
-
-        time.sleep(0.30)
-
-    vision.set_status(
-        f"SCAN COMPLETE / NEXT {best_loc['class']}"
-    )
-
-    return best_loc
+    while not vision.is_stopped():
+        time.sleep(0.25)
 
 
 
 def sort_direction(class_name):
     """
-    tennis_ball -> 左侧分类区
-    bottle      -> 右侧分类区
-    """
-    if class_name == "tennis_ball":
-        return TENNIS_DROP_TURN_DEG, "LEFT / 网球区"
+    Return lateral movement sign and zone name.
 
-    return BOTTLE_DROP_TURN_DEG, "RIGHT / 水瓶区"
+    RoboMaster EP:
+        y < 0 -> left
+        y > 0 -> right
+    """
+
+    if class_name == "tennis_ball":
+        return -1.0, "LEFT / TENNIS ZONE"
+
+    return 1.0, "RIGHT / BOTTLE ZONE"
+
+
+def _strafe_until_marker_lost(
+    chassis,
+    vision,
+    y_speed,
+    lost_required_s,
+    status_name,
+):
+    """
+    Move laterally until the marker remains absent for
+    lost_required_s.
+
+    Returns:
+        (True, "EDGE")
+        (False, "SENSOR_TIMEOUT")
+        (False, "MAX_RUN")
+    """
+
+    start_time = time.monotonic()
+
+    marker_lost_since = None
+    marker_stale_since = None
+    last_marker_seq = -1
+
+    vision.set_status(status_name)
+
+    while True:
+        if vision.is_stopped():
+            raise KeyboardInterrupt
+
+        now = time.monotonic()
+
+        (
+            marker_seq,
+            marker_time,
+            marker_found,
+        ) = vision.marker_snapshot()
+
+        marker_fresh = (
+            marker_time > 0
+            and (
+                now - marker_time
+                <= MARKER_STATE_MAX_AGE_S
+            )
+        )
+
+        if marker_fresh:
+            marker_stale_since = None
+
+            if marker_seq != last_marker_seq:
+                last_marker_seq = marker_seq
+
+                if marker_found:
+                    marker_lost_since = None
+                elif marker_lost_since is None:
+                    marker_lost_since = now
+
+            if marker_found:
+                marker_lost_since = None
+
+        else:
+            marker_lost_since = None
+
+            if marker_stale_since is None:
+                marker_stale_since = now
+
+            if (
+                now - marker_stale_since
+                >= MARKER_SENSOR_TIMEOUT_S
+            ):
+                _stop_chassis_now(chassis)
+
+                print(
+                    "[DROP STRAFE] Marker sensor stale. "
+                    "Do NOT release object."
+                )
+
+                return False, "SENSOR_TIMEOUT"
+
+        if marker_lost_since is not None:
+            lost_for = now - marker_lost_since
+
+            print(
+                f"[DROP STRAFE] marker absent "
+                f"{lost_for:.2f}/"
+                f"{lost_required_s:.2f}s"
+            )
+
+            if lost_for >= lost_required_s:
+                _stop_chassis_now(chassis)
+
+                print(
+                    "[DROP STRAFE] Edge confirmed."
+                )
+
+                return True, "EDGE"
+
+        if (
+            now - start_time
+            >= LATERAL_MAX_RUN_S
+        ):
+            _stop_chassis_now(chassis)
+
+            print(
+                "[DROP STRAFE] Max lateral run reached. "
+                "Do NOT release object."
+            )
+
+            return False, "MAX_RUN"
+
+        chassis.drive_speed(
+            x=0,
+            y=float(y_speed),
+            z=0,
+            timeout=0.5,
+        )
+
+        time.sleep(0.05)
 
 
 def place_to_sort_side(
@@ -3085,58 +3588,84 @@ def place_to_sort_side(
     vision,
 ):
     """
-    抓取成功后的分类动作：
+    New classification placement:
 
-        抓起
-          ↓
-        网球左转90° / 水瓶右转90°
-          ↓
-        前进到分类放置区
-          ↓
-        机械臂下降一点
-          ↓
-        松开夹爪
-          ↓
-        机械臂抬起
-          ↓
-        后退回原位置
-          ↓
-        转回原来的目标区域方向
+        tennis_ball -> strafe left
+        bottle      -> strafe right
 
-    这样每次分拣后机器人仍能继续面对剩余目标。
+    Continue moving laterally until the black marker remains
+    absent for DROP_MARKER_LOST_S, then stop and release.
     """
-    turn_deg, zone_name = sort_direction(class_name)
 
-    print()
-    print("==============================================")
-    print(f"[SORT] {class_name} -> {zone_name}")
-    print("==============================================")
-
-    vision.set_status(
-        f"SORT {class_name} -> {zone_name}"
+    direction_sign, zone_name = (
+        sort_direction(class_name)
     )
 
-    # 1. 转向对应分类区
-    chassis.move(
-        x=0,
-        y=0,
-        z=float(turn_deg),
-        z_speed=DROP_Z_SPEED,
-    ).wait_for_completed()
+    y_speed = (
+        direction_sign
+        * DROP_STRAFE_SPEED
+    )
 
-    time.sleep(0.35)
+    print()
+    print(
+        "=============================================="
+    )
+    print(
+        f"[SORT] {class_name} -> {zone_name}"
+    )
+    print(
+        f"[SORT] Lateral movement y="
+        f"{y_speed:+.2f}m/s"
+    )
+    print(
+        "=============================================="
+    )
 
-    # 2. 向分类区前进一点，避免物体落在机器人正旁边
-    chassis.move(
-        x=DROP_FORWARD_M,
-        y=0,
-        z=0,
-        xy_speed=DROP_XY_SPEED,
-    ).wait_for_completed()
+    # The forced YOLO latch is no longer needed after
+    # the object has already been grasped.
+    vision.set_force_yolo(False)
+    vision.set_target("auto")
+    vision.set_profile(None)
 
-    time.sleep(0.30)
+    reached_edge, reason = (
+        _strafe_until_marker_lost(
+            chassis=chassis,
+            vision=vision,
+            y_speed=y_speed,
+            lost_required_s=DROP_MARKER_LOST_S,
+            status_name=(
+                f"SORT STRAFE / {zone_name}"
+            ),
+        )
+    )
 
-    # 3. 把物体稍微放低
+    if not reached_edge:
+        print()
+        print(
+            "[SORT] Drop edge was NOT confirmed."
+        )
+        print(
+            "[SORT] Object remains gripped."
+        )
+        print(
+            f"[SORT] Reason: {reason}"
+        )
+
+        vision.set_status(
+            "SORT STOPPED / OBJECT STILL GRIPPED"
+        )
+
+        return False
+
+    print(
+        f"[SORT] Marker absent for "
+        f"{DROP_MARKER_LOST_S:.1f}s."
+    )
+    print(
+        "[SORT] Stop lateral motion and release object."
+    )
+
+    # Lower object before release.
     try:
         _wait_arm_action(
             arm.move(
@@ -3146,15 +3675,26 @@ def place_to_sort_side(
             "sort lower",
         )
         time.sleep(0.30)
+
     except Exception as e:
-        print("drop lower warning:", repr(e))
+        print(
+            "drop lower warning:",
+            repr(e),
+        )
 
-    # 4. 松开夹爪完成分类放置
-    print(f"[SORT] 放置 {class_name}")
-    gripper.open(power=DROP_OPEN_POWER)
-    time.sleep(DROP_OPEN_TIME)
+    print(
+        f"[SORT] Release {class_name}"
+    )
 
-    # 5. 机械臂重新抬高，防止后退时碰到已放置物体
+    gripper.open(
+        power=DROP_OPEN_POWER
+    )
+
+    time.sleep(
+        DROP_OPEN_TIME
+    )
+
+    # Lift arm after release.
     try:
         _wait_arm_action(
             arm.move(
@@ -3164,38 +3704,31 @@ def place_to_sort_side(
             "sort lift",
         )
         time.sleep(0.25)
+
     except Exception as e:
-        print("drop lift warning:", repr(e))
+        print(
+            "drop lift warning:",
+            repr(e),
+        )
 
-    # 6. 退回放置前的位置
-    chassis.move(
-        x=-DROP_FORWARD_M,
-        y=0,
-        z=0,
-        xy_speed=DROP_XY_SPEED,
-    ).wait_for_completed()
+    gripper.open(
+        power=OPEN_POWER
+    )
 
-    time.sleep(0.30)
-
-    # 7. 转回原来面对目标区域的方向
-    chassis.move(
-        x=0,
-        y=0,
-        z=float(-turn_deg),
-        z_speed=DROP_Z_SPEED,
-    ).wait_for_completed()
-
-    time.sleep(0.35)
-
-    # 8. 夹爪打开；真正的“恢复视野 + 扫描”放到 RETURN_SEARCH 阶段
-    gripper.open(power=OPEN_POWER)
     time.sleep(0.25)
 
     vision.set_target("auto")
     vision.set_profile(None)
-    vision.set_status("SORT DONE / RETURN SEARCH")
+    vision.set_status(
+        "SORT DONE / LATERAL DROP COMPLETE"
+    )
 
-    print("[SORT] 分类放置动作完成，准备恢复搜索视野。")
+    print(
+        "[SORT] Lateral placement complete."
+    )
+
+    return True
+
 
 
 
@@ -3643,24 +4176,39 @@ def main():
             )
 
             if cls is None or profile is None:
-                empty_count += 1
-
                 print(
-                    f"[SEARCH] 本轮没有找到可抓目标 "
-                    f"({empty_count}/{args.empty_retries})"
+                    "[SEARCH] No graspable target in "
+                    "the current view."
+                )
+                print(
+                    "[SEARCH] Start lateral search."
                 )
 
-                # 回高位再看一次，避免因为上一轮姿态残留导致误判为空
                 move_arm_to_observe_pose(arm)
+
                 vision.set_target("auto")
                 vision.set_profile(None)
 
-                if empty_count >= args.empty_retries:
-                    print()
-                    print("连续多轮没有目标，认为分拣区域已经处理完成。")
-                    break
+                search_state = (
+                    return_search_and_scan(
+                        arm=arm,
+                        chassis=chassis,
+                        vision=vision,
+                    )
+                )
 
-                time.sleep(0.6)
+                if search_state == "IDLE":
+                    _hold_program_idle(
+                        chassis=chassis,
+                        vision=vision,
+                        reason=(
+                            "two lateral search edges "
+                            "reached without a target"
+                        ),
+                    )
+                    return 0
+
+                time.sleep(0.25)
                 continue
 
             empty_count = 0
@@ -3697,7 +4245,7 @@ def main():
                 continue
 
             # 抓取成功，执行左右分类
-            place_to_sort_side(
+            placed = place_to_sort_side(
                 arm=arm,
                 chassis=chassis,
                 gripper=gripper,
@@ -3705,11 +4253,17 @@ def main():
                 vision=vision,
             )
 
-            # 关键新增：
-            # 放完以后不要直接在当前靠前位置找下一个。
-            # 先后退恢复视野，再做左/中/右扫描，
-            # 最终让车朝向下一批目标最有希望的方向。
-            return_search_and_scan(
+            if not placed:
+                _hold_program_idle(
+                    chassis=chassis,
+                    vision=vision,
+                    reason=(
+                        "drop boundary was not safely confirmed"
+                    ),
+                )
+                return 0
+
+            search_state = return_search_and_scan(
                 arm=arm,
                 chassis=chassis,
                 vision=vision,
@@ -3730,6 +4284,17 @@ def main():
 
             # RETURN_SEARCH 已完成后退与左/中/右重观测。
             # 等画面稳定，再重新选择当前最近目标。
+            if search_state == "IDLE":
+                _hold_program_idle(
+                    chassis=chassis,
+                    vision=vision,
+                    reason=(
+                        "second marker-loss boundary reached "
+                        "without finding another target"
+                    ),
+                )
+                return 0
+
             time.sleep(0.6)
 
         try:
