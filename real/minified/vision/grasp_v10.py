@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -278,6 +278,31 @@ DROP_OPEN_TIME = 1.0
 # 先后退恢复更宽视野，再做左/中/右扫描。
 RETURN_BACK_M = 0.25
 RETURN_BACK_SPEED = 0.18
+
+# ==========================================================
+# Safety retreat after manipulation
+# ==========================================================
+POST_GRASP_BACK_M = 0.15
+POST_GRASP_FAIL_BACK_M = 0.15
+POST_DROP_BACK_M = 0.15
+
+SAFE_BACK_SPEED = 0.12
+
+# ==========================================================
+# Chassis heading restore
+# ==========================================================
+YAW_SUB_FREQ = 20
+YAW_MAX_AGE_S = 0.80
+
+YAW_RESTORE_TOL_DEG = 2.5
+YAW_RESTORE_MAX_STEP_DEG = 12.0
+YAW_RESTORE_Z_SPEED = 10
+YAW_RESTORE_MAX_ATTEMPTS = 4
+YAW_RESTORE_ACTION_TIMEOUT_S = 4.0
+
+_yaw_lock = threading.Lock()
+_yaw_value = None
+_yaw_time = 0.0
 
 # ==========================================================
 # Lateral search / lateral drop
@@ -3031,6 +3056,358 @@ def _stop_chassis_now(chassis):
         pass
 
 
+
+def safe_back_up(
+    chassis,
+    distance_m,
+    label,
+    speed_mps=SAFE_BACK_SPEED,
+):
+    """
+    Straight backward safety retreat.
+
+    Important:
+    Do not send a new drive_speed() command immediately
+    before chassis.move(). Let the previous chassis control
+    settle first, then use the same move() pattern that has
+    already worked in RETURN_SEARCH on the real robot.
+    """
+
+    distance_m = abs(float(distance_m))
+    speed_mps = abs(float(speed_mps))
+
+    if distance_m <= 0.001:
+        return True
+
+    if speed_mps <= 0.001:
+        print(
+            f"[SAFE BACKUP] {label}: invalid speed."
+        )
+        return False
+
+    print()
+    print(
+        "=============================================="
+    )
+    print(
+        f"[SAFE BACKUP] {label}: "
+        f"{distance_m * 100:.0f} cm"
+    )
+    print(
+        f"[SAFE BACKUP] move speed="
+        f"{speed_mps:.2f} m/s"
+    )
+    print(
+        "=============================================="
+    )
+
+    try:
+        # Do not issue drive_speed(0) here.
+        # Give the chassis controller enough idle time before
+        # starting a new position Action.
+        print(
+            f"[SAFE BACKUP] {label}: "
+            "settling chassis before move"
+        )
+
+        time.sleep(0.80)
+
+        print(
+            f"[SAFE BACKUP] {label}: "
+            "send chassis.move()"
+        )
+
+        action = chassis.move(
+            x=-distance_m,
+            y=0,
+            z=0,
+            xy_speed=speed_mps,
+        )
+
+        print(
+            f"[SAFE BACKUP] {label}: "
+            "waiting for chassis action"
+        )
+
+        completed = action.wait_for_completed(
+            timeout=6.0
+        )
+
+        if not completed:
+            print(
+                f"[SAFE BACKUP] {label}: "
+                "ACTION TIMEOUT"
+            )
+            return False
+
+        print(
+            f"[SAFE BACKUP] {label}: "
+            "move completed"
+        )
+
+        # Same settling style as the old proven
+        # RETURN_SEARCH implementation.
+        time.sleep(0.35)
+
+        print(
+            f"[SAFE BACKUP] {label}: OK"
+        )
+
+        return True
+
+    except Exception as e:
+        print(
+            f"[SAFE BACKUP] {label}: FAILED"
+        )
+        print(
+            "[SAFE BACKUP] error:",
+            repr(e),
+        )
+
+        return False
+
+
+
+
+def _attitude_callback(attitude):
+    global _yaw_value
+    global _yaw_time
+
+    try:
+        yaw, pitch, roll = attitude
+        yaw = float(yaw)
+    except Exception:
+        return
+
+    with _yaw_lock:
+        _yaw_value = yaw
+        _yaw_time = time.monotonic()
+
+
+def _wrap_yaw_deg(value):
+    value = float(value)
+
+    while value > 180.0:
+        value -= 360.0
+
+    while value < -180.0:
+        value += 360.0
+
+    return value
+
+
+def _current_yaw():
+    with _yaw_lock:
+        yaw = _yaw_value
+        ts = _yaw_time
+
+    if yaw is None:
+        return None
+
+    if ts <= 0:
+        return None
+
+    if (
+        time.monotonic() - ts
+        > YAW_MAX_AGE_S
+    ):
+        return None
+
+    return float(yaw)
+
+
+def wait_for_yaw(timeout=2.0):
+    deadline = (
+        time.monotonic()
+        + float(timeout)
+    )
+
+    while time.monotonic() < deadline:
+        yaw = _current_yaw()
+
+        if yaw is not None:
+            return yaw
+
+        time.sleep(0.05)
+
+    return None
+
+
+def capture_heading_reference(label):
+    yaw = wait_for_yaw(
+        timeout=2.0
+    )
+
+    if yaw is None:
+        print(
+            f"[YAW] {label}: "
+            "no fresh attitude data"
+        )
+
+        return None
+
+    print(
+        f"[YAW] {label}: "
+        f"reference={yaw:+.2f} deg"
+    )
+
+    return yaw
+
+
+def restore_chassis_heading(
+    chassis,
+    reference_yaw,
+    label,
+):
+    """
+    Restore chassis yaw to the heading recorded before
+    approaching the current object.
+
+    The correction sign follows the already-tested
+    chassis.move(z=...) + attitude feedback convention.
+    """
+
+    if reference_yaw is None:
+        print(
+            f"[YAW RESTORE] {label}: "
+            "missing reference yaw"
+        )
+        return False
+
+    print()
+    print(
+        "=============================================="
+    )
+    print(
+        f"[YAW RESTORE] {label}"
+    )
+    print(
+        f"[YAW RESTORE] target="
+        f"{reference_yaw:+.2f} deg"
+    )
+    print(
+        "=============================================="
+    )
+
+    for attempt in range(
+        1,
+        YAW_RESTORE_MAX_ATTEMPTS + 1,
+    ):
+        current_yaw = wait_for_yaw(
+            timeout=2.0
+        )
+
+        if current_yaw is None:
+            print(
+                f"[YAW RESTORE] {label}: "
+                "no fresh yaw"
+            )
+            return False
+
+        error = _wrap_yaw_deg(
+            reference_yaw
+            - current_yaw
+        )
+
+        print(
+            f"[YAW RESTORE] attempt "
+            f"{attempt}/"
+            f"{YAW_RESTORE_MAX_ATTEMPTS}: "
+            f"current={current_yaw:+.2f}, "
+            f"error={error:+.2f} deg"
+        )
+
+        if (
+            abs(error)
+            <= YAW_RESTORE_TOL_DEG
+        ):
+            print(
+                f"[YAW RESTORE] {label}: OK"
+            )
+            return True
+
+        # Real-robot convention:
+        # chassis.move(z=positive) makes IMU yaw decrease.
+        # Therefore the move command must use the opposite
+        # sign of (target_yaw - current_yaw).
+        correction = max(
+            -YAW_RESTORE_MAX_STEP_DEG,
+            min(
+                YAW_RESTORE_MAX_STEP_DEG,
+                -error,
+            ),
+        )
+
+        print(
+            f"[YAW RESTORE] rotate "
+            f"z={correction:+.2f} deg"
+        )
+
+        action = chassis.move(
+            x=0,
+            y=0,
+            z=float(correction),
+            z_speed=YAW_RESTORE_Z_SPEED,
+        )
+
+        completed = (
+            action.wait_for_completed(
+                timeout=(
+                    YAW_RESTORE_ACTION_TIMEOUT_S
+                )
+            )
+        )
+
+        if not completed:
+            print(
+                f"[YAW RESTORE] {label}: "
+                "rotation action timeout"
+            )
+            print(
+                f"[YAW RESTORE] state="
+                f"{getattr(action, 'state', None)} "
+                f"percent="
+                f"{getattr(action, '_percent', None)}"
+            )
+            return False
+
+        time.sleep(0.45)
+
+    final_yaw = wait_for_yaw(
+        timeout=1.0
+    )
+
+    if final_yaw is None:
+        return False
+
+    final_error = _wrap_yaw_deg(
+        reference_yaw
+        - final_yaw
+    )
+
+    print(
+        f"[YAW RESTORE] final="
+        f"{final_yaw:+.2f}, "
+        f"error={final_error:+.2f} deg"
+    )
+
+    if (
+        abs(final_error)
+        <= YAW_RESTORE_TOL_DEG
+    ):
+        print(
+            f"[YAW RESTORE] {label}: OK"
+        )
+        return True
+
+    print(
+        f"[YAW RESTORE] {label}: "
+        "FAILED"
+    )
+
+    return False
+
+
 def _fresh_search_candidate(vision):
     _, det_time, _, detections = vision.snapshot()
 
@@ -3252,6 +3629,7 @@ def return_search_and_scan(
     arm,
     chassis,
     vision,
+    do_backup=True,
 ):
     """
     New search strategy:
@@ -3292,24 +3670,35 @@ def return_search_and_scan(
     vision.set_target("auto")
     vision.set_profile(None)
 
-    # Recover wider view after the previous grasp.
-    vision.set_status(
-        "RETURN_SEARCH / BACK UP"
-    )
+    # Only a normal no-target search needs the original
+    # 25 cm recovery backup.
+    #
+    # After a successful drop, the robot has already backed
+    # away by POST_DROP_BACK_M, so do not retreat twice.
+    if do_backup:
+        vision.set_status(
+            "RETURN_SEARCH / BACK UP"
+        )
 
-    print(
-        f"[RETURN_SEARCH] Back up "
-        f"{RETURN_BACK_M*100:.0f}cm"
-    )
+        if not safe_back_up(
+            chassis=chassis,
+            distance_m=RETURN_BACK_M,
+            speed_mps=RETURN_BACK_SPEED,
+            label="SEARCH RECOVERY",
+        ):
+            print(
+                "[RETURN_SEARCH] Backup failed."
+            )
+            return "IDLE"
 
-    chassis.move(
-        x=-RETURN_BACK_M,
-        y=0,
-        z=0,
-        xy_speed=RETURN_BACK_SPEED,
-    ).wait_for_completed()
+    else:
+        print(
+            "[RETURN_SEARCH] Skip 25 cm backup: "
+            "post-drop retreat already completed."
+        )
 
-    time.sleep(0.35)
+        _stop_chassis_now(chassis)
+        time.sleep(0.15)
 
     # First check the current stationary view.
     initial = _fresh_search_candidate(
@@ -3475,7 +3864,6 @@ def _strafe_until_marker_lost(
     Returns:
         (True, "EDGE")
         (False, "SENSOR_TIMEOUT")
-        (False, "MAX_RUN")
     """
 
     start_time = time.monotonic()
@@ -3556,19 +3944,6 @@ def _strafe_until_marker_lost(
                 )
 
                 return True, "EDGE"
-
-        if (
-            now - start_time
-            >= LATERAL_MAX_RUN_S
-        ):
-            _stop_chassis_now(chassis)
-
-            print(
-                "[DROP STRAFE] Max lateral run reached. "
-                "Do NOT release object."
-            )
-
-            return False, "MAX_RUN"
 
         chassis.drive_speed(
             x=0,
@@ -3716,6 +4091,27 @@ def place_to_sort_side(
     )
 
     time.sleep(0.25)
+
+    # The object has been released and the arm has been
+    # lifted again. Create clearance before searching.
+    vision.set_status(
+        "POST DROP / SAFE BACKUP"
+    )
+
+    if not safe_back_up(
+        chassis=chassis,
+        distance_m=POST_DROP_BACK_M,
+        label="POST DROP",
+    ):
+        print(
+            "[SORT] Post-drop safety backup failed."
+        )
+
+        vision.set_status(
+            "SORT STOPPED / BACKUP FAILED"
+        )
+
+        return False
 
     vision.set_target("auto")
     vision.set_profile(None)
@@ -3979,6 +4375,7 @@ def main():
     initialized = False
     camera_started = False
     subscribed = False
+    attitude_subscribed = False
 
     vision = None
     gripper = None
@@ -4009,6 +4406,31 @@ def main():
         )
 
         subscribed = True
+
+        chassis.sub_attitude(
+            freq=YAW_SUB_FREQ,
+            callback=_attitude_callback,
+        )
+
+        attitude_subscribed = True
+
+        time.sleep(0.50)
+
+        initial_yaw = wait_for_yaw(
+            timeout=2.0
+        )
+
+        session_reference_yaw = initial_yaw
+
+        print(
+            "[YAW] attitude subscription: "
+            f"{initial_yaw}"
+        )
+
+        print(
+            "[YAW] SESSION FORWARD REFERENCE: "
+            f"{session_reference_yaw}"
+        )
 
         try:
             exp2.robot_signal_idle(ep)
@@ -4079,6 +4501,15 @@ def main():
 
         if not args.sort_mode:
             # 保留单目标测试模式
+            grasp_reference_yaw = (
+                session_reference_yaw
+            )
+
+            print(
+                "[YAW] USE SESSION FORWARD REFERENCE: "
+                f"{grasp_reference_yaw}"
+            )
+
             cls, profile = pregrasp_with_recovery(
                 arm=arm,
                 chassis=chassis,
@@ -4122,7 +4553,75 @@ def main():
             )
 
             if not ok:
+                print(
+                    "[GRASP] Failed -> recover, "
+                    "open gripper, then retreat."
+                )
+
+                move_arm_to_observe_pose(arm)
+
+                gripper.open(
+                    power=OPEN_POWER
+                )
+
+                time.sleep(0.25)
+
+                safe_back_up(
+                    chassis=chassis,
+                    distance_m=POST_GRASP_FAIL_BACK_M,
+                    label="GRASP FAIL",
+                )
+
                 return 6
+
+            # Successful grasp:
+            # lift first, then retreat before any further action.
+            # Put the arm into the same known stable pose
+            # used before the previously reliable RETURN_SEARCH
+            # chassis movement.
+            vision.set_status(
+                "POST GRASP / TRANSPORT POSE"
+            )
+
+            print(
+                "[POST GRASP] Move arm to transport/observe pose "
+                "before chassis retreat."
+            )
+
+            move_arm_to_observe_pose(
+                arm
+            )
+
+            vision.set_status(
+                "POST GRASP / SAFE BACKUP"
+            )
+
+            if not safe_back_up(
+                chassis=chassis,
+                distance_m=POST_GRASP_BACK_M,
+                label="POST GRASP",
+            ):
+                vision.set_status(
+                    "POST GRASP BACKUP FAILED"
+                )
+
+                return 7
+
+            if not restore_chassis_heading(
+                chassis=chassis,
+                reference_yaw=grasp_reference_yaw,
+                label="POST GRASP",
+            ):
+                vision.set_status(
+                    "POST GRASP YAW RESTORE FAILED"
+                )
+
+                print(
+                    "[YAW RESTORE] "
+                    "Post-grasp heading restore failed."
+                )
+
+                return 8
 
             if args.keep_object:
                 print("保持夹持 5 秒。")
@@ -4167,6 +4666,15 @@ def main():
                 f"========== 第 {sorted_count + 1} 个目标 =========="
             )
 
+            grasp_reference_yaw = (
+                session_reference_yaw
+            )
+
+            print(
+                "[YAW] USE SESSION FORWARD REFERENCE: "
+                f"{grasp_reference_yaw}"
+            )
+
             cls, profile = pregrasp_with_recovery(
                 arm=arm,
                 chassis=chassis,
@@ -4194,6 +4702,7 @@ def main():
                         arm=arm,
                         chassis=chassis,
                         vision=vision,
+                        do_backup=True,
                     )
                 )
 
@@ -4238,13 +4747,88 @@ def main():
                 )
 
                 move_arm_to_observe_pose(arm)
-                gripper.open(power=OPEN_POWER)
+
+                gripper.open(
+                    power=OPEN_POWER
+                )
+
+                time.sleep(0.25)
+
+                if not safe_back_up(
+                    chassis=chassis,
+                    distance_m=POST_GRASP_FAIL_BACK_M,
+                    label="GRASP FAIL",
+                ):
+                    _hold_program_idle(
+                        chassis=chassis,
+                        vision=vision,
+                        reason=(
+                            "grasp-failure safety backup failed"
+                        ),
+                    )
+
+                    return 0
+
                 vision.set_target("auto")
                 vision.set_profile(None)
+
                 time.sleep(0.5)
+
                 continue
 
             # 抓取成功，执行左右分类
+            # Successful grasp:
+            # create forward clearance before lateral transport.
+            # Put the arm into the same known stable pose
+            # used before the previously reliable RETURN_SEARCH
+            # chassis movement.
+            vision.set_status(
+                "POST GRASP / TRANSPORT POSE"
+            )
+
+            print(
+                "[POST GRASP] Move arm to transport/observe pose "
+                "before chassis retreat."
+            )
+
+            move_arm_to_observe_pose(
+                arm
+            )
+
+            vision.set_status(
+                "POST GRASP / SAFE BACKUP"
+            )
+
+            if not safe_back_up(
+                chassis=chassis,
+                distance_m=POST_GRASP_BACK_M,
+                label="POST GRASP",
+            ):
+                _hold_program_idle(
+                    chassis=chassis,
+                    vision=vision,
+                    reason=(
+                        "post-grasp safety backup failed"
+                    ),
+                )
+
+                return 0
+
+            if not restore_chassis_heading(
+                chassis=chassis,
+                reference_yaw=grasp_reference_yaw,
+                label="POST GRASP",
+            ):
+                _hold_program_idle(
+                    chassis=chassis,
+                    vision=vision,
+                    reason=(
+                        "post-grasp heading restore failed"
+                    ),
+                )
+
+                return 0
+
             placed = place_to_sort_side(
                 arm=arm,
                 chassis=chassis,
@@ -4263,10 +4847,26 @@ def main():
                 )
                 return 0
 
+            if not restore_chassis_heading(
+                chassis=chassis,
+                reference_yaw=grasp_reference_yaw,
+                label="POST DROP",
+            ):
+                _hold_program_idle(
+                    chassis=chassis,
+                    vision=vision,
+                    reason=(
+                        "post-drop heading restore failed"
+                    ),
+                )
+
+                return 0
+
             search_state = return_search_and_scan(
                 arm=arm,
                 chassis=chassis,
                 vision=vision,
+                do_backup=False,
             )
 
             sorted_count += 1
@@ -4334,6 +4934,12 @@ def main():
             except Exception:
                 pass
 
+        if attitude_subscribed:
+            try:
+                ep.chassis.unsub_attitude()
+            except Exception:
+                pass
+
         if camera_started:
             try:
                 ep.camera.stop_video_stream()
@@ -4349,3 +4955,4 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
