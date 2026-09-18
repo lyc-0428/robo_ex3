@@ -2,13 +2,13 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-PY="$ROOT/vision/grasp_v9.py"
+PY="$ROOT/vision/grasp_v10.py"
 
 cd "$ROOT" || exit 1
 python3 -m py_compile "$PY" || exit 1
 
 echo "============================================================"
-echo " EXP3 Grasp V9 - ALIGN_PREGRASP 稳定版"
+echo " EXP3 Grasp V10 - ALIGN_PREGRASP 稳定版"
 echo "============================================================"
 echo "修复：接近阈值后先居中，连续2次满足距离+横向条件才低头"
 echo "目标偏差>120px时只转向，不继续前冲"
