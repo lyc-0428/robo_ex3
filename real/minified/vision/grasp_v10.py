@@ -286,6 +286,15 @@ POST_GRASP_BACK_M = 0.15
 POST_GRASP_FAIL_BACK_M = 0.15
 POST_DROP_BACK_M = 0.15
 
+# Before lateral DROP movement, the black marker must be
+# visible again after grasp / backup / yaw restore.
+#
+# If the normal post-grasp retreat is not enough, retreat
+# another 5 cm at a time until the marker becomes visible.
+DROP_MARKER_REACQUIRE_STEP_M = 0.05
+DROP_MARKER_REACQUIRE_MAX_STEPS = 4
+DROP_MARKER_REACQUIRE_WAIT_S = 0.70
+
 SAFE_BACK_SPEED = 0.12
 
 # ==========================================================
@@ -312,12 +321,16 @@ _yaw_time = 0.0
 #   y < 0 -> move left
 #   y > 0 -> move right
 SEARCH_STRAFE_SPEED = 0.12
+
+# Keep one lateral-search direction long enough before
+# allowing a marker edge to reverse the direction.
+SEARCH_MIN_DIRECTION_S = 10.0
 DROP_STRAFE_SPEED = 0.12
 
 # Marker must remain absent for this long before
 # an edge is considered reached.
 SEARCH_MARKER_LOST_S = 1.0
-DROP_MARKER_LOST_S = 1.0
+DROP_MARKER_LOST_S = 1.5
 
 # Marker data older than this is not trusted.
 MARKER_STATE_MAX_AGE_S = 0.60
@@ -3588,13 +3601,27 @@ def _run_lateral_search_pass(
         # --------------------------------------------------
         if marker_lost_since is not None:
             lost_for = now - marker_lost_since
+            direction_run_s = (
+                now - start_time
+            )
 
-            if lost_for >= SEARCH_MARKER_LOST_S:
+            if (
+                lost_for >= SEARCH_MARKER_LOST_S
+                and direction_run_s
+                >= SEARCH_MIN_DIRECTION_S
+            ):
                 _stop_chassis_now(chassis)
 
                 print(
                     f"[LATERAL SEARCH] Marker absent "
                     f"for {lost_for:.2f}s -> EDGE"
+                )
+
+                print(
+                    f"[LATERAL SEARCH] Direction held for "
+                    f"{direction_run_s:.2f}s "
+                    f"(minimum "
+                    f"{SEARCH_MIN_DIRECTION_S:.1f}s)."
                 )
 
                 return "EDGE", None
@@ -3630,6 +3657,7 @@ def return_search_and_scan(
     chassis,
     vision,
     do_backup=True,
+    start_direction="LEFT",
 ):
     """
     New search strategy:
@@ -3721,80 +3749,107 @@ def return_search_and_scan(
             return "TARGET"
 
     # ------------------------------------------------------
-    # Pass 1: LEFT
+    # Continuous bounded lateral search.
     #
-    # RoboMaster EP official coordinate convention:
-    # negative y = left.
+    # Do not stop merely because both marker boundaries
+    # have been reached once.
+    #
+    # Sweep:
+    #   LEFT -> RIGHT -> LEFT -> RIGHT -> ...
+    #
+    # Continue until a target is confirmed.
+    # SENSOR_TIMEOUT / MAX_RUN still abort the search.
     # ------------------------------------------------------
-    state, loc = _run_lateral_search_pass(
-        chassis=chassis,
-        vision=vision,
-        y_speed=-SEARCH_STRAFE_SPEED,
-        pass_name="LEFT PASS",
-    )
 
-    if state == "TARGET":
-        return "TARGET"
+    # Starting direction depends on the object that was
+    # just dropped:
+    #
+    # tennis_ball dropped on LEFT -> search RIGHT first
+    # bottle dropped on RIGHT      -> search LEFT first
+    #
+    # Other callers keep the default LEFT start.
+    start_direction = str(
+        start_direction
+    ).upper()
 
-    if state != "EDGE":
-        print(
-            f"[LATERAL SEARCH] Abort search: {state}"
-        )
-        return "IDLE"
+    if start_direction == "RIGHT":
+        y_speed = SEARCH_STRAFE_SPEED
+        pass_name = "RIGHT PASS"
+    else:
+        y_speed = -SEARCH_STRAFE_SPEED
+        pass_name = "LEFT PASS"
 
-    # ------------------------------------------------------
-    # First marker-loss boundary reached.
-    # Reverse direction exactly once.
-    # ------------------------------------------------------
-    print()
     print(
-        "[LATERAL SEARCH] First edge reached -> "
-        "switch to RIGHT"
+        f"[LATERAL SEARCH] Initial direction: "
+        f"{start_direction}"
     )
 
-    time.sleep(0.25)
+    edge_count = 0
 
-    state, loc = _run_lateral_search_pass(
-        chassis=chassis,
-        vision=vision,
-        y_speed=SEARCH_STRAFE_SPEED,
-        pass_name="RIGHT PASS",
-    )
+    while True:
+        state, loc = _run_lateral_search_pass(
+            chassis=chassis,
+            vision=vision,
+            y_speed=y_speed,
+            pass_name=pass_name,
+        )
 
-    if state == "TARGET":
-        return "TARGET"
+        if state == "TARGET":
+            print(
+                "[LATERAL SEARCH] Target confirmed. "
+                "Stop continuous sweep."
+            )
 
-    _stop_chassis_now(chassis)
+            return "TARGET"
 
-    if state == "EDGE":
+        if state != "EDGE":
+            _stop_chassis_now(chassis)
+
+            print(
+                f"[LATERAL SEARCH] Abort search: {state}"
+            )
+
+            vision.set_status(
+                "IDLE / LATERAL SEARCH ABORTED"
+            )
+
+            return "IDLE"
+
+        edge_count += 1
+
+        # Reverse direction at every confirmed marker edge.
+        if y_speed < 0:
+            y_speed = SEARCH_STRAFE_SPEED
+            pass_name = "RIGHT PASS"
+            next_direction = "RIGHT"
+        else:
+            y_speed = -SEARCH_STRAFE_SPEED
+            pass_name = "LEFT PASS"
+            next_direction = "LEFT"
+
         print()
         print(
             "============================================================"
         )
         print(
-            "[LATERAL SEARCH] Second edge reached."
+            f"[LATERAL SEARCH] Edge #{edge_count} reached."
         )
         print(
-            "[LATERAL SEARCH] No target found after one "
-            "direction change."
+            f"[LATERAL SEARCH] No target yet -> "
+            f"switch to {next_direction}."
         )
         print(
-            "[LATERAL SEARCH] Robot stops here; "
-            "program stays alive."
+            "[LATERAL SEARCH] Continuous sweep remains active."
         )
         print(
             "============================================================"
         )
-    else:
-        print(
-            f"[LATERAL SEARCH] Search stopped: {state}"
+
+        vision.set_status(
+            f"LATERAL SEARCH / SWITCH {next_direction}"
         )
 
-    vision.set_status(
-        "IDLE / NO TARGET / PROGRAM ALIVE"
-    )
-
-    return "IDLE"
+        time.sleep(0.25)
 
 
 def _hold_program_idle(
@@ -3833,6 +3888,143 @@ def _hold_program_idle(
     while not vision.is_stopped():
         time.sleep(0.25)
 
+
+
+
+def _wait_for_drop_marker(
+    vision,
+    timeout=DROP_MARKER_REACQUIRE_WAIT_S,
+):
+    """
+    Return True only when a fresh camera update confirms
+    that the black marker is currently visible.
+    """
+
+    deadline = (
+        time.monotonic()
+        + float(timeout)
+    )
+
+    last_seq = -1
+
+    while time.monotonic() < deadline:
+        (
+            marker_seq,
+            marker_time,
+            marker_found,
+        ) = vision.marker_snapshot()
+
+        now = time.monotonic()
+
+        marker_fresh = (
+            marker_time > 0
+            and (
+                now - marker_time
+                <= MARKER_STATE_MAX_AGE_S
+            )
+        )
+
+        if (
+            marker_fresh
+            and marker_seq != last_seq
+        ):
+            last_seq = marker_seq
+
+            if marker_found:
+                return True
+
+        time.sleep(0.05)
+
+    return False
+
+
+def ensure_drop_marker_visible(
+    chassis,
+    vision,
+):
+    """
+    A DROP strafe may start only after the marker has been
+    visibly reacquired.
+
+    This prevents:
+        marker already absent
+        -> lateral motion starts
+        -> false edge detection
+    """
+
+    print()
+    print(
+        "=============================================="
+    )
+    print(
+        "[DROP PREP] Confirm marker before lateral movement"
+    )
+    print(
+        "=============================================="
+    )
+
+    # First give vision time to refresh while stationary.
+    if _wait_for_drop_marker(
+        vision=vision,
+    ):
+        print(
+            "[DROP PREP] Marker visible. "
+            "Lateral movement allowed."
+        )
+        return True
+
+    print(
+        "[DROP PREP] Marker not visible after normal retreat."
+    )
+
+    # Retreat a little farther until the marker is visible.
+    for step in range(
+        1,
+        DROP_MARKER_REACQUIRE_MAX_STEPS + 1,
+    ):
+        print()
+        print(
+            f"[DROP PREP] Extra retreat "
+            f"{step}/"
+            f"{DROP_MARKER_REACQUIRE_MAX_STEPS}: "
+            f"{DROP_MARKER_REACQUIRE_STEP_M * 100:.0f} cm"
+        )
+
+        ok = safe_back_up(
+            chassis=chassis,
+            distance_m=DROP_MARKER_REACQUIRE_STEP_M,
+            speed_mps=SAFE_BACK_SPEED,
+            label=f"DROP MARKER REACQUIRE {step}",
+        )
+
+        if not ok:
+            print(
+                "[DROP PREP] Extra retreat failed."
+            )
+            return False
+
+        if _wait_for_drop_marker(
+            vision=vision,
+        ):
+            print(
+                "[DROP PREP] Marker reacquired. "
+                "Lateral movement allowed."
+            )
+            return True
+
+        print(
+            "[DROP PREP] Marker still not visible."
+        )
+
+    print()
+    print(
+        "[DROP PREP] Marker could not be reacquired."
+    )
+    print(
+        "[DROP PREP] Do NOT start lateral placement."
+    )
+
+    return False
 
 
 def sort_direction(class_name):
@@ -4002,6 +4194,23 @@ def place_to_sort_side(
     vision.set_target("auto")
     vision.set_profile(None)
 
+    # Never start lateral DROP movement while the marker is
+    # already absent. Reacquire it first.
+    if not ensure_drop_marker_visible(
+        chassis=chassis,
+        vision=vision,
+    ):
+        vision.set_status(
+            "SORT STOPPED / MARKER NOT REACQUIRED"
+        )
+
+        print(
+            "[SORT] Marker was not visible before "
+            "lateral placement."
+        )
+
+        return False
+
     reached_edge, reason = (
         _strafe_until_marker_lost(
             chassis=chassis,
@@ -4039,6 +4248,120 @@ def place_to_sort_side(
     print(
         "[SORT] Stop lateral motion and release object."
     )
+
+    # --------------------------------------------------
+    # Both classes:
+    # after reaching the corresponding drop zone,
+    # move forward by the same distance that will be
+    # recovered by POST_DROP_BACK_M after release.
+    # --------------------------------------------------
+    vision.set_status(
+        "DROP / FORWARD OFFSET"
+    )
+
+    print()
+    print(
+        "=============================================="
+    )
+    print(
+        f"[SORT] {class_name} drop forward "
+        f"{POST_DROP_BACK_M * 100:.0f} cm"
+    )
+    print(
+        "=============================================="
+    )
+
+    # The robot has just finished a lateral drive_speed()
+    # movement. Stay in velocity-control mode here instead
+    # of immediately switching to chassis.move(), which has
+    # timed out repeatedly on the real robot.
+    forward_distance = float(
+        POST_DROP_BACK_M
+    )
+
+    forward_speed = float(
+        SAFE_BACK_SPEED
+    )
+
+    forward_duration = (
+        forward_distance
+        / forward_speed
+    )
+
+    try:
+        _stop_chassis_now(
+            chassis
+        )
+
+        print(
+            "[SORT] Stop lateral motion before "
+            "forward offset."
+        )
+
+        time.sleep(0.40)
+
+        print(
+            f"[SORT] Forward speed="
+            f"{forward_speed:.2f} m/s, "
+            f"time={forward_duration:.2f}s"
+        )
+
+        deadline = (
+            time.monotonic()
+            + forward_duration
+        )
+
+        while (
+            time.monotonic()
+            < deadline
+        ):
+            remaining = (
+                deadline
+                - time.monotonic()
+            )
+
+            chassis.drive_speed(
+                x=forward_speed,
+                y=0,
+                z=0,
+                timeout=0.5,
+            )
+
+            time.sleep(
+                min(
+                    0.10,
+                    max(
+                        0.01,
+                        remaining,
+                    ),
+                )
+            )
+
+        _stop_chassis_now(
+            chassis
+        )
+
+        time.sleep(0.35)
+
+        print(
+            "[SORT] Drop forward offset complete."
+        )
+
+    except Exception as e:
+        _stop_chassis_now(
+            chassis
+        )
+
+        print(
+            "[SORT] Drop forward move failed:",
+            repr(e),
+        )
+
+        vision.set_status(
+            "SORT STOPPED / DROP FORWARD FAILED"
+        )
+
+        return False
 
     # Lower object before release.
     try:
@@ -4711,8 +5034,8 @@ def main():
                         chassis=chassis,
                         vision=vision,
                         reason=(
-                            "two lateral search edges "
-                            "reached without a target"
+                            "lateral search aborted "
+                            "before finding a target"
                         ),
                     )
                     return 0
@@ -4862,11 +5185,26 @@ def main():
 
                 return 0
 
+            # Fixed post-drop search direction:
+            #
+            # tennis_ball -> dropped LEFT  -> search RIGHT
+            # bottle      -> dropped RIGHT -> search LEFT
+            if cls == "tennis_ball":
+                post_drop_search_direction = "RIGHT"
+            else:
+                post_drop_search_direction = "LEFT"
+
+            print(
+                f"[POST DROP SEARCH] {cls} -> "
+                f"start {post_drop_search_direction}"
+            )
+
             search_state = return_search_and_scan(
                 arm=arm,
                 chassis=chassis,
                 vision=vision,
                 do_backup=False,
+                start_direction=post_drop_search_direction,
             )
 
             sorted_count += 1
@@ -4889,8 +5227,8 @@ def main():
                     chassis=chassis,
                     vision=vision,
                     reason=(
-                        "second marker-loss boundary reached "
-                        "without finding another target"
+                        "lateral search aborted "
+                        "before finding another target"
                     ),
                 )
                 return 0
