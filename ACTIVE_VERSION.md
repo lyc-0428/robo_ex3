@@ -1,13 +1,18 @@
-# Active version: bottle sorting improved
+# Active version: real grid sorting final
 
-This branch is the improved mixed bottle-and-tennis sorting profile.
+This branch contains the final validated real-robot grid sorting program.
 
-Run it on the Jetson with:
+The implementation is located in `real/minified`. It preserves the successful
+V10 recognition, grasp, transport, placement, and directional-search behavior.
+Placement action counts are not treated as unique object identities, so a
+recovered object does not cause the task to stop before the remaining objects
+have been searched.
+
+Run on the Jetson with:
 
 ```bash
-cd /home/adam/Team21/lyc/robo_ex3/digital
-bash run_vision_sorting_improved.sh 21 nominal
+cd /home/adam/Team21/yjh/real_grid_sorting_v10
+bash ./run_grasp_v10.sh
 ```
 
-It enables the light-blue bottle recognition adjustments, the class-specific
-in-place turns, and the improved placement and return-to-center behavior.
+The startup banner must show `BUILD: RESTORED-MOTION-COUNT-ONLY`.

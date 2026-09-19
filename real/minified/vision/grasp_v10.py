@@ -322,9 +322,10 @@ _yaw_time = 0.0
 #   y > 0 -> move right
 SEARCH_STRAFE_SPEED = 0.12
 
-# Keep one lateral-search direction long enough before
-# allowing a marker edge to reverse the direction.
-SEARCH_MIN_DIRECTION_S = 10.0
+# The search starts outside a placement zone and moves back
+# toward the marked work strip.  Ten seconds made the robot
+# pass the real edge and wander before it was allowed to turn.
+SEARCH_MIN_DIRECTION_S = 0.8
 DROP_STRAFE_SPEED = 0.12
 
 # Marker must remain absent for this long before
@@ -345,6 +346,22 @@ LATERAL_MAX_RUN_S = 12.0
 SEARCH_CONFIRM_TIMEOUT_S = 0.80
 SEARCH_CONFIRM_WINDOW = 4
 SEARCH_CONFIRM_HITS = 2
+
+# After a successful placement, do not accept detections from
+# the placement zone.  Search becomes active only after the
+# robot has moved away for a short time and a black work marker
+# is visible again.
+SEARCH_REARM_MIN_S = 1.0
+
+# A single moving frame must not make the chassis brake.  Two
+# compatible frames first nominate a target; the existing
+# stationary confirmation then makes the final decision.
+SEARCH_MOVING_CONFIRM_HITS = 2
+SEARCH_MOVING_MATCH_X_PX = 80.0
+
+# One outbound pass plus one return pass covers the work strip.
+# If neither pass finds a target, the task can end cleanly.
+SEARCH_MAX_EDGE_COUNT = 2
 
 
 # 扫描角度（chassis.move）
@@ -3453,6 +3470,7 @@ def _run_lateral_search_pass(
     vision,
     y_speed,
     pass_name,
+    require_marker_reentry=False,
 ):
     """
     Move laterally while searching.
@@ -3480,7 +3498,27 @@ def _run_lateral_search_pass(
     marker_stale_since = None
 
     last_marker_seq = -1
-    last_det_seq = -1
+
+    # Flush detections produced before this pass.  In particular,
+    # do not reuse the last frame of the object just placed.
+    last_det_seq, _, _, _ = vision.snapshot()
+
+    search_armed = not require_marker_reentry
+    armed_time = start_time if search_armed else None
+
+    moving_candidate_class = None
+    moving_candidate_x = None
+    moving_candidate_hits = 0
+
+    if require_marker_reentry:
+        print(
+            "[LATERAL SEARCH] Placement-zone lock active: "
+            "ignore objects until a black work marker is "
+            "re-entered."
+        )
+        vision.set_status(
+            "LATERAL SEARCH / LEAVE DROP ZONE"
+        )
 
     while True:
         if vision.is_stopped():
@@ -3489,64 +3527,9 @@ def _run_lateral_search_pass(
         now = time.monotonic()
 
         # --------------------------------------------------
-        # First check whether YOLO has found an object.
-        # --------------------------------------------------
-        det_seq, det_time, _, detections = (
-            vision.snapshot()
-        )
-
-        if det_seq != last_det_seq:
-            last_det_seq = det_seq
-
-            det_fresh = (
-                det_time > 0
-                and (
-                    now - det_time
-                    <= MAX_DET_AGE_S
-                )
-            )
-
-            if det_fresh and detections:
-                candidate = _priority_pick(
-                    detections,
-                    previous=None,
-                )
-
-                if candidate is not None:
-                    print(
-                        f"[LATERAL SEARCH] Candidate: "
-                        f"{candidate['class']} "
-                        f"bottom_y="
-                        f"{candidate['bottom_y']:.1f}"
-                    )
-
-                    _stop_chassis_now(chassis)
-
-                    confirmed = _confirm_search_target(
-                        vision
-                    )
-
-                    if confirmed is not None:
-                        print(
-                            f"[LATERAL SEARCH] TARGET FOUND: "
-                            f"{confirmed['class']} "
-                            f"bottom_y="
-                            f"{confirmed['bottom_y']:.1f}"
-                        )
-
-                        vision.set_status(
-                            "LATERAL SEARCH / TARGET FOUND"
-                        )
-
-                        return "TARGET", confirmed
-
-                    print(
-                        "[LATERAL SEARCH] Candidate not "
-                        "stable; resume strafe."
-                    )
-
-        # --------------------------------------------------
-        # Marker boundary detection.
+        # Marker state comes first.  After a drop it is the
+        # re-arm gate that separates placed objects from the
+        # remaining objects on the work strip.
         # --------------------------------------------------
         (
             marker_seq,
@@ -3565,16 +3548,41 @@ def _run_lateral_search_pass(
         if marker_fresh:
             marker_stale_since = None
 
+            if (
+                not search_armed
+                and marker_found
+                and now - start_time
+                >= SEARCH_REARM_MIN_S
+            ):
+                search_armed = True
+                armed_time = now
+                marker_lost_since = None
+                moving_candidate_class = None
+                moving_candidate_x = None
+                moving_candidate_hits = 0
+
+                # Flush any detections collected while the
+                # camera still looked into the placement zone.
+                last_det_seq, _, _, _ = vision.snapshot()
+
+                print(
+                    "[LATERAL SEARCH] Work marker re-entered; "
+                    "new-target recognition ARMED."
+                )
+                vision.set_status(
+                    "LATERAL SEARCH / ARMED"
+                )
+
             if marker_seq != last_marker_seq:
                 last_marker_seq = marker_seq
 
-                if marker_found:
+                if marker_found or not search_armed:
                     marker_lost_since = None
 
                 elif marker_lost_since is None:
                     marker_lost_since = now
 
-            if marker_found:
+            if marker_found or not search_armed:
                 marker_lost_since = None
 
         else:
@@ -3597,12 +3605,105 @@ def _run_lateral_search_pass(
                 return "SENSOR_TIMEOUT", None
 
         # --------------------------------------------------
+        # Accept a moving target only after the placement-zone
+        # lock has opened.  Requiring compatible consecutive
+        # frames removes the stop/start caused by one-frame
+        # false detections.
+        # --------------------------------------------------
+        if search_armed:
+            det_seq, det_time, _, detections = (
+                vision.snapshot()
+            )
+
+            if det_seq != last_det_seq:
+                last_det_seq = det_seq
+
+                det_fresh = (
+                    det_time > 0
+                    and now - det_time
+                    <= MAX_DET_AGE_S
+                )
+
+                candidate = None
+                if det_fresh and detections:
+                    candidate = _priority_pick(
+                        detections,
+                        previous=None,
+                    )
+
+                if candidate is None:
+                    moving_candidate_class = None
+                    moving_candidate_x = None
+                    moving_candidate_hits = 0
+                else:
+                    candidate_x = float(
+                        candidate["bottom_x"]
+                    )
+                    compatible = (
+                        moving_candidate_class
+                        == candidate["class"]
+                        and moving_candidate_x is not None
+                        and abs(
+                            candidate_x
+                            - moving_candidate_x
+                        )
+                        <= SEARCH_MOVING_MATCH_X_PX
+                    )
+
+                    if compatible:
+                        moving_candidate_hits += 1
+                    else:
+                        moving_candidate_hits = 1
+
+                    moving_candidate_class = (
+                        candidate["class"]
+                    )
+                    moving_candidate_x = candidate_x
+
+                    print(
+                        f"[LATERAL SEARCH] Candidate "
+                        f"{candidate['class']} "
+                        f"{moving_candidate_hits}/"
+                        f"{SEARCH_MOVING_CONFIRM_HITS}"
+                    )
+
+                    if (
+                        moving_candidate_hits
+                        >= SEARCH_MOVING_CONFIRM_HITS
+                    ):
+                        _stop_chassis_now(chassis)
+
+                        confirmed = _confirm_search_target(
+                            vision
+                        )
+
+                        if confirmed is not None:
+                            print(
+                                "[LATERAL SEARCH] TARGET FOUND: "
+                                f"{confirmed['class']} "
+                                f"bottom_y="
+                                f"{confirmed['bottom_y']:.1f}"
+                            )
+                            vision.set_status(
+                                "LATERAL SEARCH / TARGET FOUND"
+                            )
+                            return "TARGET", confirmed
+
+                        print(
+                            "[LATERAL SEARCH] Candidate not "
+                            "stable; resume strafe."
+                        )
+                        moving_candidate_class = None
+                        moving_candidate_x = None
+                        moving_candidate_hits = 0
+
+        # --------------------------------------------------
         # Continuous marker absence -> edge reached.
         # --------------------------------------------------
-        if marker_lost_since is not None:
+        if search_armed and marker_lost_since is not None:
             lost_for = now - marker_lost_since
             direction_run_s = (
-                now - start_time
+                now - armed_time
             )
 
             if (
@@ -3658,6 +3759,7 @@ def return_search_and_scan(
     vision,
     do_backup=True,
     start_direction="LEFT",
+    require_marker_reentry=False,
 ):
     """
     New search strategy:
@@ -3728,25 +3830,33 @@ def return_search_and_scan(
         _stop_chassis_now(chassis)
         time.sleep(0.15)
 
-    # First check the current stationary view.
-    initial = _fresh_search_candidate(
-        vision
-    )
-
-    if initial is not None:
-        _stop_chassis_now(chassis)
-
-        confirmed = _confirm_search_target(
+    # A normal recovery may use the stationary view.  A
+    # post-drop recovery must first leave the placement zone;
+    # otherwise the object just released can be selected again.
+    if not require_marker_reentry:
+        initial = _fresh_search_candidate(
             vision
         )
 
-        if confirmed is not None:
-            print(
-                f"[LATERAL SEARCH] Target already "
-                f"visible: {confirmed['class']}"
+        if initial is not None:
+            _stop_chassis_now(chassis)
+
+            confirmed = _confirm_search_target(
+                vision
             )
 
-            return "TARGET"
+            if confirmed is not None:
+                print(
+                    f"[LATERAL SEARCH] Target already "
+                    f"visible: {confirmed['class']}"
+                )
+
+                return "TARGET"
+    else:
+        print(
+            "[POST DROP SEARCH] Current placement-zone "
+            "detections are ignored."
+        )
 
     # ------------------------------------------------------
     # Continuous bounded lateral search.
@@ -3785,6 +3895,7 @@ def return_search_and_scan(
     )
 
     edge_count = 0
+    first_pass = True
 
     while True:
         state, loc = _run_lateral_search_pass(
@@ -3792,7 +3903,13 @@ def return_search_and_scan(
             vision=vision,
             y_speed=y_speed,
             pass_name=pass_name,
+            require_marker_reentry=(
+                require_marker_reentry
+                and first_pass
+            ),
         )
+
+        first_pass = False
 
         if state == "TARGET":
             print(
@@ -3816,6 +3933,18 @@ def return_search_and_scan(
             return "IDLE"
 
         edge_count += 1
+
+        if edge_count >= SEARCH_MAX_EDGE_COUNT:
+            _stop_chassis_now(chassis)
+
+            print(
+                "[LATERAL SEARCH] Full outbound/return "
+                "sweep completed with no new target."
+            )
+            vision.set_status(
+                "SORT COMPLETE / NO NEW TARGET"
+            )
+            return "EMPTY"
 
         # Reverse direction at every confirmed marker edge.
         if y_speed < 0:
@@ -3849,7 +3978,7 @@ def return_search_and_scan(
             f"LATERAL SEARCH / SWITCH {next_direction}"
         )
 
-        time.sleep(0.25)
+        time.sleep(0.15)
 
 
 def _hold_program_idle(
@@ -4963,6 +5092,7 @@ def main():
         empty_count = 0
         tennis_count = 0
         bottle_count = 0
+        completed_items = []
 
         # 多物体分拣始终允许同时识别两类
         args.target = "auto"
@@ -4974,19 +5104,20 @@ def main():
         print("开始多目标自动分拣")
         print("优先级：bottom_y 最大的目标优先（最近优先）")
         print("网球 -> 左侧；水瓶 -> 右侧")
-        print(f"最多处理 {args.max_items} 个目标")
+        print(f"场景预计 {args.max_items} 个物体；抓放次数不作为退出条件")
+        print("重抓可能是同一物体，往返搜索无可执行目标后结束")
         print("============================================================")
 
-        while sorted_count < args.max_items:
+        while True:
             vision.set_target("auto")
             vision.set_profile(None)
             vision.set_status(
-                f"SEARCH NEXT {sorted_count + 1}/{args.max_items}"
+                f"SEARCH / PLACEMENT EVENTS {sorted_count}"
             )
 
             print()
             print(
-                f"========== 第 {sorted_count + 1} 个目标 =========="
+                f"========== 第 {sorted_count + 1} 次抓放尝试 =========="
             )
 
             grasp_reference_yaw = (
@@ -5028,6 +5159,13 @@ def main():
                         do_backup=True,
                     )
                 )
+
+                if search_state == "EMPTY":
+                    print(
+                        "[SEARCH] Full work-strip sweep found "
+                        "no executable target. Task complete."
+                    )
+                    break
 
                 if search_state == "IDLE":
                     _hold_program_idle(
@@ -5185,6 +5323,38 @@ def main():
 
                 return 0
 
+            # Count completed action cycles, not unique objects.
+            # A dropped object can be recovered in another cycle.
+            # Only the existing full-sweep EMPTY result ends the task.
+            sorted_count += 1
+
+            if cls == "tennis_ball":
+                tennis_count += 1
+            else:
+                bottle_count += 1
+
+            completed_id = f"PLACEMENT-EVENT-{sorted_count}"
+            completed_items.append(
+                {
+                    "id": completed_id,
+                    "class": cls,
+                    "zone": sort_direction(cls)[1],
+                    "unique_object_id": None,
+                    "placement_verified": False,
+                }
+            )
+
+            print()
+            print(
+                f"[PLACEMENT ACTION] {completed_id} | "
+                f"class={cls} | "
+                f"zone={sort_direction(cls)[1]}"
+            )
+            print(
+                f"[PROGRESS] 抓放动作完成 {sorted_count} 次（非独立物体数） | "
+                f"tennis_ball={tennis_count} | bottle={bottle_count}"
+            )
+
             # Fixed post-drop search direction:
             #
             # tennis_ball -> dropped LEFT  -> search RIGHT
@@ -5205,23 +5375,18 @@ def main():
                 vision=vision,
                 do_backup=False,
                 start_direction=post_drop_search_direction,
-            )
-
-            sorted_count += 1
-
-            if cls == "tennis_ball":
-                tennis_count += 1
-            else:
-                bottle_count += 1
-
-            print()
-            print(
-                f"[PROGRESS] 已分拣 {sorted_count}/{args.max_items} | "
-                f"tennis_ball={tennis_count} | bottle={bottle_count}"
+                require_marker_reentry=True,
             )
 
             # RETURN_SEARCH 已完成后退与左/中/右重观测。
             # 等画面稳定，再重新选择当前最近目标。
+            if search_state == "EMPTY":
+                print(
+                    "[SEARCH] Full work-strip sweep found "
+                    "no new target. Task complete."
+                )
+                break
+
             if search_state == "IDLE":
                 _hold_program_idle(
                     chassis=chassis,
@@ -5245,9 +5410,11 @@ def main():
         print()
         print("============================================================")
         print("自动分拣结束")
-        print(f"总数        : {sorted_count}")
-        print(f"tennis_ball : {tennis_count}")
-        print(f"bottle      : {bottle_count}")
+        print(f"抓放动作次数 : {sorted_count}（包括可能的重抓）")
+        print(f"网球动作次数 : {tennis_count}")
+        print(f"水瓶动作次数 : {bottle_count}")
+        print("独立物体数   : 未验证；未用动作次数代替")
+        print(f"动作记录     : {completed_items}")
         print("============================================================")
 
         time.sleep(2.0)
@@ -5293,4 +5460,3 @@ def main():
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
