@@ -6,11 +6,18 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "actions"))
 from linear_sorting_core import (
-    ROW_X, VerifiedLedger, make_linear_layout, select_visible, drop_y, rail_command,
+    ROW_X, VerifiedLedger, bbox_grid_cell, make_linear_layout, select_visible,
+    drop_y, rail_command,
 )
 
 
 class LinearCoreTests(unittest.TestCase):
+    def test_bbox_center_maps_to_fixed_grid(self):
+        self.assertEqual(bbox_grid_cell(.60, 320, 320)[:2], ('G2', .60))
+        cell, center, visual_y = bbox_grid_cell(.60, 353.3, 320, .0009)
+        self.assertEqual((cell, center), ('G2', .60))
+        self.assertAlmostEqual(visual_y, .57003, places=4)
+
     def test_six_mixed_objects_collinear_and_separated(self):
         layout = make_linear_layout(21)
         self.assertEqual([d['class_name'] for d in layout].count('bottle'), 3)

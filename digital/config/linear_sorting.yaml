@@ -93,12 +93,14 @@ grasp_cube_action:
     controller_timeout_seconds: 20.0
     scene_ready_timeout_seconds: 90.0
     # New lateral workflow; seconds are wall time unless stated otherwise.
-    linear_scan_speed_mps: 0.050
-    linear_transport_speed_mps: 0.60
-    linear_empty_return_speed_mps: 0.90
+    linear_scan_speed_mps: 0.060
+    linear_transport_speed_mps: 0.65
+    linear_empty_return_speed_mps: 0.95
     linear_acceleration_mps2: 1.00
     linear_move_timeout_seconds: 600.0
     linear_watch_seconds: 3.0
     linear_position_tolerance_m: 0.010
+    grid_meters_per_pixel: 0.0009
+    empty_passes_before_finish: 2
     # 0 repeats both directions until all six releases have been verified.
     linear_max_passes: 0

@@ -870,9 +870,15 @@ class GraspBottleTennisAction(GraspCubeAction):
             )
         if (
             label == "释放后抬臂离开"
-            and self._use_tennis_grasp
+            and self._current_class in (BOTTLE, TENNIS)
             and self._active_initial_positions is not None
         ):
+            # A bottle used to take the base implementation here, which only
+            # raised arm_1 and left the forward links beside the dropped
+            # bottle.  The chassis then retraced the placement corridor and
+            # the still-extended arm could knock the bottle over.  For both
+            # object types, first lift through the cleared pose, then retract
+            # all arm links before any chassis return motion.
             initial = self._active_initial_positions
             index = {name: i for i, name in enumerate(POSITION_JOINTS)}
             clearance = self._vertical_clearance_pose(start, initial)

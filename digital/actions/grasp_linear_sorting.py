@@ -20,7 +20,7 @@ from sorting_identity import SortingIdentity
 from linear_arm_kinematics import LinearArmKinematics, ARM_JOINTS, ArmReachError
 from linear_sorting_core import (
     ROW_X, LEFT_END, RIGHT_END, EMPTY_GRID_CELL, EMPTY_GRID_Y, VerifiedLedger,
-    drop_y, fixed_grid_cell, rail_command, select_visible,
+    bbox_grid_cell, drop_y, fixed_grid_cell, rail_command, select_visible,
 )
 from vision_common import BOTTLE, TENNIS, TENNIS_SPAWN_HEIGHT
 
@@ -32,10 +32,12 @@ class AcquisitionMiss(GraspActionError):
 class LinearSorter(GraspBottleTennisAction):
     def __init__(self):
         super().__init__()
-        defaults = dict(linear_scan_speed_mps=.050, linear_transport_speed_mps=.60,
-                        linear_empty_return_speed_mps=.90, linear_acceleration_mps2=1.00,
+        defaults = dict(linear_scan_speed_mps=.060, linear_transport_speed_mps=.65,
+                        linear_empty_return_speed_mps=.95, linear_acceleration_mps2=1.00,
                         linear_move_timeout_seconds=600.0,
                         linear_watch_seconds=3.0, linear_max_passes=0,
+                        grid_meters_per_pixel=.0009,
+                        empty_passes_before_finish=2,
                         linear_position_tolerance_m=.010)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
@@ -46,12 +48,18 @@ class LinearSorter(GraspBottleTennisAction):
         self.move_timeout = float(self.get_parameter("linear_move_timeout_seconds").value)
         self.watch_seconds = float(self.get_parameter("linear_watch_seconds").value)
         self.max_passes = int(self.get_parameter("linear_max_passes").value)
+        self.grid_meters_per_pixel = float(
+            self.get_parameter("grid_meters_per_pixel").value)
+        self.empty_passes_before_finish = int(
+            self.get_parameter("empty_passes_before_finish").value)
         self.rail_tolerance = float(self.get_parameter("linear_position_tolerance_m").value)
         if not (0 < self.scan_speed <= .06 and 0 < self.transport_speed <= .65
                 and 0 < self.empty_return_speed <= .95
                 and 0 < self.acceleration <= 1.10 and self.move_timeout > 0
                 and self.watch_seconds > 0 and 0 < self.rail_tolerance <= .01
-                and self.max_passes >= 0):
+                and self.max_passes >= 0
+                and 0 < self.grid_meters_per_pixel <= .003
+                and self.empty_passes_before_finish >= 1):
             raise GraspActionError("invalid linear sorting parameters")
         self.velocity = self.create_publisher(Twist, "/linear_sort/cmd_vel", 10)
         self._last_frame_time = 0.0
@@ -135,8 +143,12 @@ class LinearSorter(GraspBottleTennisAction):
                 horizontal_clearance = .06
                 # A bottle raised above 8 cm clears the source-row bodies
                 # vertically, so its short, reachable retraction is enough.
+                # Keep 2 cm of horizontal margin here.  The former 3 cm
+                # threshold sat exactly on the measured 0.030 m separation;
+                # floating-point/physics jitter then caused a false emergency
+                # stop even though the raised bottle was already clear.
                 if self._current_class == BOTTLE and float(pos[2]) >= .08:
-                    horizontal_clearance = .03
+                    horizontal_clearance = .02
                 if float(other[0])-float(pos[0]) < horizontal_clearance:
                     raise GraspActionError(f"carried object has not cleared source row: load_x={pos[0]:.3f}, other={name}, other_x={other[0]:.3f}; base stopped")
 
@@ -172,6 +184,10 @@ class LinearSorter(GraspBottleTennisAction):
                         self._publish_status(
                             f"EMPTY GRID | cell={EMPTY_GRID_CELL} | action=continue "
                             f"{'right' if self._scan_direction < 0 else 'left'}"
+                        )
+                        self._publish_status(
+                            f"EXCEPTION | type=empty_grid | cell={EMPTY_GRID_CELL} "
+                            "| handled=continue_scan"
                         )
                     # Pause at each occupied row location once per pass. Its
                     # class remains unknown until YOLO supplies a detection.
@@ -247,12 +263,16 @@ class LinearSorter(GraspBottleTennisAction):
             raise AcquisitionMiss("object pose expired before alignment")
         self._locked_object_origin = pos.copy()
         self._current_class = detection["class_name"]
-        self._current_grid, grid_y = fixed_grid_cell(float(pos[1]))
         box = detection["bbox"]
         center_x = .5 * (float(box["x1"]) + float(box["x2"]))
         center_y = .5 * (float(box["y1"]) + float(box["y2"]))
+        visual_grid, visual_grid_y, visual_y = bbox_grid_cell(
+            self._pose().y, center_x, self.camera_principal_x,
+            self.grid_meters_per_pixel)
+        self._current_grid, grid_y = fixed_grid_cell(float(pos[1]))
         self._publish_status(
-            f"FIXED GRID TARGET | cell={self._current_grid} | cell_y={grid_y:.2f} "
+            f"GRID MAPPING | source=bbox_center | cell={visual_grid} "
+            f"| visual_y={visual_y:.3f} | cell_y={visual_grid_y:.2f} "
             f"| bbox_center=({center_x:.1f},{center_y:.1f}) | class={self._current_class} | destination="
             f"{'left tennis area' if self._current_class == TENNIS else 'right bottle area'}"
         )
@@ -260,6 +280,8 @@ class LinearSorter(GraspBottleTennisAction):
         self.arm_2_delta = self.tennis_arm_2_delta if self._use_tennis_grasp else self.bottle_arm_2_delta
         # Small tennis balls need millimetre alignment. The minimum lateral
         # command above overcomes the previous low-speed contact dead zone.
+        # Preserve the six-object-success version's exact physical alignment.
+        # Visual mapping is reported for assessment but never alters motion.
         self._move_y(float(pos[1]), held, arrival_tolerance=.004)
         if not self._use_tennis_grasp:
             # select_visible already required two stable, same-ID bottle
@@ -491,8 +513,22 @@ class LinearSorter(GraspBottleTennisAction):
         self._publish_status(f"CARRY RETRACTED | id={self._carried} | destination_y={target_y:.2f}")
         self._move_y(target_y, current, arrival_tolerance=.02)
         self._carried = None
-        # At the destination keep the arm retracted: lower, release, and lift
-        # vertically.  No forward reach is needed inside the wide drop zone.
+        # A carried bottle has been retracted about 8 cm for safe transport.
+        # If it is lowered from that pose, it lands beside the front corner of
+        # the chassis and can be clipped when the base starts its lateral
+        # return.  The bottle zone is empty, so restore that 8 cm here before
+        # lowering.  This places the bottle back near ROW_X and outside the
+        # chassis sweep, while preserving the original transport clearance.
+        if self._current_class == BOTTLE:
+            current = self._shift_held(
+                current,
+                dx=.080,
+                label="瓶区向前送出留出底盘回程间隙",
+            )
+            self._publish_status(
+                "BOTTLE DROP STANDOFF | forward=0.080 m | base corridor clear"
+            )
+        # At the destination lower, release, lift vertically, then fold.
         carry_tool = self._kinematics.fk(current)
         grasp_tool = self._kinematics.fk(closed)
         current = self._shift_held(current, dz=float(grasp_tool[1]-carry_tool[1]),
@@ -505,11 +541,18 @@ class LinearSorter(GraspBottleTennisAction):
         current = self._move_arm("释放后仅竖直抬起", opened, released_up,
                                  duration=.25)
         if self._current_class == BOTTLE:
-            # Pull the empty gripper back before the high-speed return so it
-            # cannot clip a bottle that has just been released.
-            rear_clearance = self._kinematics.shift(current, dx=-.02)
-            current = self._move_arm("放瓶后向后收臂", current, rear_clearance,
-                                     duration=.25)
+            # The old 2 cm retreat left the arm beside the tall bottle.  The
+            # returning base could then sweep the gripper through a bottle
+            # that had already passed the ground-release check.  The gripper
+            # is now lifted first (above), then fully folded before any base
+            # motion is permitted.
+            fully_retracted = self._carry_pose(current)
+            current = self._move_arm(
+                "放瓶后完全收臂再允许回程", current, fully_retracted)
+            self._settle(current, .15)
+            self._publish_status(
+                "BOTTLE DROP CLEAR | gripper fully retracted before base return"
+            )
         released = self._verify_ground_release(target_y)
         self._ledger.record(self._locked_object_id, self._current_class,
                             self._locked_object_origin, released, target_y)
@@ -562,7 +605,10 @@ class LinearSorter(GraspBottleTennisAction):
             raise GraspActionError("Gazebo identity feedback unavailable")
         self._move_y(LEFT_END, current)
         passes = 0
+        empty_passes = 0
+        no_executable_target = False
         while rclpy.ok() and not self._ledger.done:
+            pass_start_count = len(self._ledger.completed)
             self._pass_attempted.clear()
             self._pass_watched.clear()
             self._pass_empty_cells.clear()
@@ -594,10 +640,25 @@ class LinearSorter(GraspBottleTennisAction):
                         self._zero_base()
                         self._carried = None
                         self._publish_status(f"GRASP FAILED | id={name} | attempt={attempt+1}/2 | {error} | count unchanged")
+                        self._publish_status(
+                            f"EXCEPTION | type=grasp_failure | id={name} "
+                            f"| handled={'retry_same_target' if attempt == 0 else 'retry_next_pass'}"
+                        )
                         current = self._open_and_fold(list(self.last_position_command or current))
                         if attempt == 1:
                             self._pass_attempted.add(name)
                             self._publish_status(f"RETRY NEXT PASS | id={name} | two attempts failed")
+                    except ArmReachError as error:
+                        self._zero_base()
+                        self._carried = None
+                        self._pass_attempted.add(name)
+                        self._publish_status(
+                            f"EXCEPTION | type=unreachable_target | id={name} "
+                            f"| handled=skip_until_next_pass | detail={error}"
+                        )
+                        current = self._open_and_fold(
+                            list(self.last_position_command or current))
+                        break
                 if self._ledger.done:
                     break
                 self._set_vision_enabled(False, "resume lateral scan")
@@ -607,6 +668,27 @@ class LinearSorter(GraspBottleTennisAction):
                     # front of the next possible object.
                     resume_y = float(self._locked_object_origin[1]) + .22*self._scan_direction
                     resume_y = min(LEFT_END, max(RIGHT_END, resume_y))
+                    if self._current_class == BOTTLE:
+                        # Leave the newly placed upright bottle gently before
+                        # accelerating across the table.  The forward drop
+                        # offset above prevents contact; this short slow phase
+                        # also avoids a large lateral impulse beside it.
+                        pose = self._pose()
+                        distance = resume_y-pose.y
+                        if abs(distance) > .04:
+                            clearance_y = pose.y + math.copysign(
+                                min(.24, abs(distance)), distance
+                            )
+                            self._publish_status(
+                                "BOTTLE BASE CLEARANCE | "
+                                f"y={pose.y:.2f}->{clearance_y:.2f} | speed=0.28 m/s"
+                            )
+                            self._move_y(
+                                clearance_y,
+                                current,
+                                speed=.28,
+                                arrival_tolerance=.02,
+                            )
                     self._publish_status(
                         f"FAST RESUME | completed_y={self._locked_object_origin[1]:.2f} "
                         f"| next_scan_y={resume_y:.2f}"
@@ -619,10 +701,29 @@ class LinearSorter(GraspBottleTennisAction):
             passes += 1
             if self._ledger.done:
                 break
+            if len(self._ledger.completed) == pass_start_count:
+                empty_passes += 1
+            else:
+                empty_passes = 0
+            if empty_passes >= self.empty_passes_before_finish:
+                no_executable_target = True
+                self._publish_status(
+                    f"NO EXECUTABLE TARGET | empty_passes={empty_passes} "
+                    f"| verified={len(self._ledger.completed)}/6 | action=finish"
+                )
+                break
             if self.max_passes and passes >= self.max_passes:
                 raise GraspActionError(f"pass limit reached; only {len(self._ledger.completed)}/6 verified")
             self._scan_direction *= -1
             self._publish_status(f"RESCAN | remaining={6-len(self._ledger.completed)} | no false completion")
+        if no_executable_target:
+            self._set_vision_enabled(False, "no executable target")
+            self._zero_base()
+            self._publish_status(
+                f"LINEAR SORTING FINISHED | reason=no_executable_target "
+                f"| verified={len(self._ledger.completed)}/6"
+            )
+            return
         if not self._ledger.done:
             raise GraspActionError("sorting interrupted before six verified releases")
         self._set_vision_enabled(False, "six verified releases")

@@ -18,8 +18,10 @@ def main():
     for item in make_linear_layout(args.seed):
         item["z"] = TENNIS_SPAWN_HEIGHT if item["class_name"] == "tennis" else 0.0
         model_root = args.model_root
-        if item["class_name"] == "tennis" and (model_root/"tennis_debug").is_dir():
-            model_root = model_root/"tennis_debug"
+        tennis_debug = model_root/"tennis_debug"
+        tennis_debug_mesh = tennis_debug/"056_tennis_ball"/"textured.obj"
+        if item["class_name"] == "tennis" and tennis_debug_mesh.is_file():
+            model_root = tennis_debug
         spawn(item, model_root)
     write_ready_file(args.scene_ready_file)
     print("LINEAR SCENE READY | fixed cells=G1..G7 | G4=empty | tennis=3 bottle=3", flush=True)

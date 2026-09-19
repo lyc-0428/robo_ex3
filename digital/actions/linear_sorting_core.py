@@ -36,6 +36,25 @@ def fixed_grid_cell(world_y):
     return f"G{index+1}", center
 
 
+def bbox_grid_cell(robot_y, bbox_center_x, principal_x, meters_per_pixel=.0009):
+    """Map a detection-box centre to G1..G7 using the camera/base pose.
+
+    The camera faces the fixed object row: pixels to the image right are
+    negative world-y.  Odometry supplies the moving camera origin, while the
+    bbox centre supplies the target's lateral displacement in the image.
+    """
+    values = (robot_y, bbox_center_x, principal_x, meters_per_pixel)
+    if not all(math.isfinite(float(value)) for value in values):
+        raise ValueError("non-finite visual grid mapping input")
+    if not 0 < float(meters_per_pixel) <= .003:
+        raise ValueError("invalid visual grid scale")
+    visual_y = float(robot_y) - (
+        float(bbox_center_x)-float(principal_x)
+    )*float(meters_per_pixel)
+    cell, center = fixed_grid_cell(max(RIGHT_END, min(LEFT_END, visual_y)))
+    return cell, center, visual_y
+
+
 def drop_y(kind, already_sorted):
     if kind not in ("tennis", "bottle") or not 0 <= already_sorted < 3:
         raise ValueError("invalid class or full placement area")
