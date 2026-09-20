@@ -1,0 +1,871 @@
+Last login: Sat Sep 19 18:17:26 on ttys000
+(base) shanyudejitabopian@shanyudejitabopiandeMacBook-Air ~ % ssh -t adam@10.140.247.161 'cd /home/adam/Team21/yjh/robo_ex3_linear_final/digital && ROBO_EX3_ENV_SCRIPT=/home/adam/Team21/lyc/robo_ex3/digital/activate_team21.sh bash ./run_linear_sorting.sh'
+adam@10.140.247.161's password: 
+bash: 第 1 行： cd: /home/adam/Team21/yjh/robo_ex3_linear_final/digital: 没有那个文件或目录
+Connection to 10.140.247.161 closed.
+(base) shanyudejitabopian@shanyudejitabopiandeMacBook-Air ~ % ssh -t adam@10.140.247.161 'set -e; SIM_REPO=/home/adam/Team21/yjh/robo_ex3_linear_final; git clone --branch linear-sorting-final --single-branch https://github.com/lyc-0428/robo_ex3.git "$SIM_REPO"; cd "$SIM_REPO/digital"; ROBO_EX3_ENV_SCRIPT=/home/adam/Team21/lyc/robo_ex3/digital/activate_team21.sh bash ./run_linear_sorting.sh'
+adam@10.140.247.161's password: 
+正克隆到 '/home/adam/Team21/yjh/robo_ex3_linear_final'...
+remote: Enumerating objects: 359, done.
+remote: Counting objects: 100% (59/59), done.
+remote: Compressing objects: 100% (43/43), done.
+remote: Total 359 (delta 23), reused 21 (delta 15), pack-reused 300 (from 2)
+接收对象中: 100% (359/359), 66.15 MiB | 2.36 MiB/s, 完成.
+处理 delta 中: 100% (96/96), 完成.
+运行目录：/home/adam/Team21/yjh/robo_ex3_linear_final/digital
+直线横移：G1-G7 黑色固定网格，G4 留空；3 网球 + 3 水瓶，验证到 6 后结束。
+[INFO] [launch]: All log files can be found below /home/adam/.ros/log/2026-09-19-20-00-55-364251-adam-desktop-303623
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [ign-1]: process started with pid [303629]
+[INFO] [robot_state_publisher-2]: process started with pid [303631]
+[INFO] [parameter_bridge-3]: process started with pid [303633]
+[robot_state_publisher-2] [INFO] [1789819255.786252018] [robot_state_publisher]: got segment arm_1_link
+[robot_state_publisher-2] [INFO] [1789819255.786509565] [robot_state_publisher]: got segment arm_2_link
+[robot_state_publisher-2] [INFO] [1789819255.786530077] [robot_state_publisher]: got segment arm_base_link
+[robot_state_publisher-2] [INFO] [1789819255.786539454] [robot_state_publisher]: got segment base_link
+[robot_state_publisher-2] [INFO] [1789819255.786547294] [robot_state_publisher]: got segment camera_link
+[robot_state_publisher-2] [INFO] [1789819255.786554654] [robot_state_publisher]: got segment camera_optical_link
+[robot_state_publisher-2] [INFO] [1789819255.786577983] [robot_state_publisher]: got segment chassis_base_link
+[robot_state_publisher-2] [INFO] [1789819255.786586336] [robot_state_publisher]: got segment end_point_link
+[robot_state_publisher-2] [INFO] [1789819255.786594400] [robot_state_publisher]: got segment endpoint_bracket_link
+[robot_state_publisher-2] [INFO] [1789819255.786601856] [robot_state_publisher]: got segment extension_base_link
+[robot_state_publisher-2] [INFO] [1789819255.786609537] [robot_state_publisher]: got segment front_hit_sensor_link
+[robot_state_publisher-2] [INFO] [1789819255.786616225] [robot_state_publisher]: got segment front_led_link
+[robot_state_publisher-2] [INFO] [1789819255.786623105] [robot_state_publisher]: got segment front_left_wheel_link
+[robot_state_publisher-2] [INFO] [1789819255.786630369] [robot_state_publisher]: got segment front_right_wheel_link
+[robot_state_publisher-2] [INFO] [1789819255.786637538] [robot_state_publisher]: got segment gripper_link
+[robot_state_publisher-2] [INFO] [1789819255.786644642] [robot_state_publisher]: got segment gripper_m_link
+[robot_state_publisher-2] [INFO] [1789819255.786651714] [robot_state_publisher]: got segment gripper_t_link
+[robot_state_publisher-2] [INFO] [1789819255.786658691] [robot_state_publisher]: got segment intelligent_controller_link
+[robot_state_publisher-2] [INFO] [1789819255.786666275] [robot_state_publisher]: got segment left_gripper_link_1
+[robot_state_publisher-2] [INFO] [1789819255.786672931] [robot_state_publisher]: got segment left_gripper_link_2
+[robot_state_publisher-2] [INFO] [1789819255.786679587] [robot_state_publisher]: got segment left_gripper_link_4
+[robot_state_publisher-2] [INFO] [1789819255.786686436] [robot_state_publisher]: got segment left_gripper_link_5
+[robot_state_publisher-2] [INFO] [1789819255.786693316] [robot_state_publisher]: got segment left_gripper_link_6
+[robot_state_publisher-2] [INFO] [1789819255.786699780] [robot_state_publisher]: got segment left_gripper_link_7
+[robot_state_publisher-2] [INFO] [1789819255.786706341] [robot_state_publisher]: got segment left_hit_sensor_link
+[robot_state_publisher-2] [INFO] [1789819255.786713093] [robot_state_publisher]: got segment left_led_link
+[robot_state_publisher-2] [INFO] [1789819255.786719941] [robot_state_publisher]: got segment rear_hit_sensor_link
+[robot_state_publisher-2] [INFO] [1789819255.786726917] [robot_state_publisher]: got segment rear_led_link
+[robot_state_publisher-2] [INFO] [1789819255.786733542] [robot_state_publisher]: got segment rear_left_wheel_link
+[robot_state_publisher-2] [INFO] [1789819255.786740454] [robot_state_publisher]: got segment rear_right_wheel_link
+[robot_state_publisher-2] [INFO] [1789819255.786747558] [robot_state_publisher]: got segment right_gripper_link_1
+[robot_state_publisher-2] [INFO] [1789819255.786754343] [robot_state_publisher]: got segment right_gripper_link_2
+[robot_state_publisher-2] [INFO] [1789819255.786761063] [robot_state_publisher]: got segment right_gripper_link_4
+[robot_state_publisher-2] [INFO] [1789819255.786767623] [robot_state_publisher]: got segment right_gripper_link_5
+[robot_state_publisher-2] [INFO] [1789819255.786774567] [robot_state_publisher]: got segment right_gripper_link_6
+[robot_state_publisher-2] [INFO] [1789819255.786781128] [robot_state_publisher]: got segment right_gripper_link_7
+[robot_state_publisher-2] [INFO] [1789819255.786787880] [robot_state_publisher]: got segment right_hit_sensor_link
+[robot_state_publisher-2] [INFO] [1789819255.786794792] [robot_state_publisher]: got segment right_led_link
+[robot_state_publisher-2] [INFO] [1789819255.786801928] [robot_state_publisher]: got segment rod_1_link
+[robot_state_publisher-2] [INFO] [1789819255.786808617] [robot_state_publisher]: got segment rod_2_link
+[robot_state_publisher-2] [INFO] [1789819255.786815401] [robot_state_publisher]: got segment rod_3_link
+[robot_state_publisher-2] [INFO] [1789819255.786821993] [robot_state_publisher]: got segment rod_link
+[robot_state_publisher-2] [INFO] [1789819255.786828842] [robot_state_publisher]: got segment triangle_link
+[parameter_bridge-3] [INFO] [1789819255.879799926] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/clock (ignition.msgs.Clock) -> /clock (rosgraph_msgs/msg/Clock)] (Lazy 0)
+[parameter_bridge-3] [INFO] [1789819255.884568120] [ros_gz_bridge]: Creating ROS->GZ Bridge: [/linear_sort/cmd_vel (geometry_msgs/msg/Twist) -> /linear_sort/cmd_vel (ignition.msgs.Twist)] (Lazy 0)
+[parameter_bridge-3] [INFO] [1789819255.890247008] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/camera/image_raw (ignition.msgs.Image) -> /camera/image_raw (sensor_msgs/msg/Image)] (Lazy 0)
+[parameter_bridge-3] [INFO] [1789819255.893632586] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/camera/image_raw/camera_info (ignition.msgs.CameraInfo) -> /camera/image_raw/camera_info (sensor_msgs/msg/CameraInfo)] (Lazy 0)
+[parameter_bridge-3] [INFO] [1789819255.895733407] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/camera/camera_info (ignition.msgs.CameraInfo) -> /camera/camera_info (sensor_msgs/msg/CameraInfo)] (Lazy 0)
+[parameter_bridge-3] [INFO] [1789819255.896707399] [ros_gz_bridge]: Creating GZ->ROS Bridge: [/camera_info (ignition.msgs.CameraInfo) -> /camera_info (sensor_msgs/msg/CameraInfo)] (Lazy 0)
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/Gazebo/GazeboDrawer.qml:242:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/EntityContextMenuPlugin/EntityContextMenuPlugin.qml:56:5: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/Spawn/Spawn.qml:32:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/TransformControl/TransformControl.qml:104:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/TransformControl/TransformControl.qml:99:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/TransformControl/TransformControl.qml:94:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/TransformControl/TransformControl.qml:89:3: QML Connections: Implicitly defined onFoo properties in Connections are deprecated. Use this syntax instead: function onFoo(<arguments>) { ... }
+[ign-1] [GUI] [Wrn] [Application.cc:802] [QT] file::/WorldStats/WorldStats.qml:53:3: QML RowLayout: Binding loop detected for property "x"
+[ign-1] libEGL warning: MESA-LOADER: failed to open nvidia-drm: /usr/lib/dri/nvidia-drm_dri.so: 无法打开共享目标文件: 没有那个文件或目录 (search paths /usr/lib/aarch64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+[ign-1] 
+[ign-1] libEGL warning: MESA-LOADER: failed to open nvidia-drm: /usr/lib/dri/nvidia-drm_dri.so: 无法打开共享目标文件: 没有那个文件或目录 (search paths /usr/lib/aarch64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+[ign-1] 
+[ign-1] libEGL warning: egl: failed to create dri2 screen
+[ign-1] libEGL warning: egl: failed to create dri2 screen
+[INFO] [create-4]: process started with pid [303768]
+[create-4] [INFO] [1789819261.068800044] [ros_gz_sim]: Requested creation of entity.
+[create-4] [INFO] [1789819261.069126714] [ros_gz_sim]: OK creation of entity.
+[INFO] [create-4]: process has finished cleanly [pid 303768]
+[ign-1] [INFO] [1789819261.242801439] [GazeboSimROS2ControlPlugin]: robot_param_node is robot_state_publisher
+[ign-1] [INFO] [1789819261.242892290] [GazeboSimROS2ControlPlugin]: robot_param_node is robot_description
+[ign-1] [INFO] [1789819261.285981118] [gz_ros2_control]: connected to service!! robot_state_publisher asking for robot_description
+[ign-1] [INFO] [1789819261.287281715] [gz_ros2_control]: Received URDF from param server
+[ign-1] [INFO] [1789819261.301320015] [gz_ros2_control]: The position_proportional_gain has been set to: 0.1
+[ign-1] [INFO] [1789819261.301562649] [gz_ros2_control]: Loading joint: front_left_wheel_joint
+[ign-1] [INFO] [1789819261.301616315] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.301636188] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.301662013] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301675678] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.301686142] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301763233] [gz_ros2_control]: Loading joint: front_right_wheel_joint
+[ign-1] [INFO] [1789819261.301791234] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.301807299] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.301825444] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301836772] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.301845157] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301894567] [gz_ros2_control]: Loading joint: rear_left_wheel_joint
+[ign-1] [INFO] [1789819261.301916264] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.301931176] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.301944521] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301954569] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.301962569] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.301999627] [gz_ros2_control]: Loading joint: rear_right_wheel_joint
+[ign-1] [INFO] [1789819261.302020844] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302036748] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302049005] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302059245] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302068398] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302107887] [gz_ros2_control]: Loading joint: arm_1_joint
+[ign-1] [INFO] [1789819261.302125200] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302138161] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302154417] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302165138] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302174290] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302212852] [gz_ros2_control]: Loading joint: arm_2_joint
+[ign-1] [INFO] [1789819261.302236661] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302256597] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302268406] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302277878] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302286743] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302323832] [gz_ros2_control]: Loading joint: endpoint_bracket_joint
+[ign-1] [INFO] [1789819261.302340793] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302352505] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302363546] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302372346] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302380538] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302419804] [gz_ros2_control]: Loading joint: rod_1_joint
+[ign-1] [INFO] [1789819261.302437341] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302449309] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302458558] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302466942] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302474654] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302510880] [gz_ros2_control]: Loading joint: rod_2_joint
+[ign-1] [INFO] [1789819261.302526752] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302538657] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302555714] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302588963] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302604292] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302647717] [gz_ros2_control]: Loading joint: rod_3_joint
+[ign-1] [INFO] [1789819261.302671014] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.302686631] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.302697991] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.302706888] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.302714760] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303035125] [gz_ros2_control]: Loading joint: rod_joint
+[ign-1] [INFO] [1789819261.303066518] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.303085591] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303098936] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.303108088] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.303115864] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303215293] [gz_ros2_control]: Loading joint: triangle_joint
+[ign-1] [INFO] [1789819261.303234845] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.303248702] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303262974] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.303273119] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.303282911] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303321761] [gz_ros2_control]: Loading joint: gripper_m_joint
+[ign-1] [INFO] [1789819261.303345314] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.303357442] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303380995] [gz_ros2_control]: 			 found initial value: -0.022918
+[ign-1] [INFO] [1789819261.303403140] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.303412229] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.303420293] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303558795] [gz_ros2_control]: Loading joint: left_gripper_joint_1
+[ign-1] [INFO] [1789819261.303587404] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.303602028] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303687184] [gz_ros2_control]: 			 found initial value: 0.687846
+[ign-1] [INFO] [1789819261.303717137] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.303737330] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.303749138] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303790964] [gz_ros2_control]: Loading joint: left_gripper_joint_2
+[ign-1] [INFO] [1789819261.303807477] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.303881432] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303906681] [gz_ros2_control]: 			 found initial value: -1.764646
+[ign-1] [INFO] [1789819261.303924729] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.303938394] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.303948890] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.303987900] [gz_ros2_control]: Loading joint: left_gripper_joint_4
+[ign-1] [INFO] [1789819261.304007133] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304021277] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304032958] [gz_ros2_control]: 			 found initial value: -0.019682
+[ign-1] [INFO] [1789819261.304113601] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304183044] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.304203109] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304243654] [gz_ros2_control]: Loading joint: left_gripper_joint_5
+[ign-1] [INFO] [1789819261.304262055] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304275496] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304290504] [gz_ros2_control]: 			 found initial value: 1.088293
+[ign-1] [INFO] [1789819261.304355467] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304368555] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.304379116] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304418702] [gz_ros2_control]: Loading joint: left_gripper_joint_6
+[ign-1] [INFO] [1789819261.304435726] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304448079] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304458671] [gz_ros2_control]: 			 found initial value: -0.933733
+[ign-1] [INFO] [1789819261.304471824] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304482000] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.304490864] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304578964] [gz_ros2_control]: Loading joint: left_gripper_joint_7
+[ign-1] [INFO] [1789819261.304603637] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304619414] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304632214] [gz_ros2_control]: 			 found initial value: -0.306504
+[ign-1] [INFO] [1789819261.304643991] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304652983] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.304665464] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304701945] [gz_ros2_control]: Loading joint: right_gripper_joint_1
+[ign-1] [INFO] [1789819261.304787165] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304857055] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304872288] [gz_ros2_control]: 			 found initial value: -0.703549
+[ign-1] [INFO] [1789819261.304885569] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304896353] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.304905473] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304941795] [gz_ros2_control]: Loading joint: right_gripper_joint_2
+[ign-1] [INFO] [1789819261.304957475] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.304967620] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.304975844] [gz_ros2_control]: 			 found initial value: 1.786527
+[ign-1] [INFO] [1789819261.304985189] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.304992677] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.305000677] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305037351] [gz_ros2_control]: Loading joint: right_gripper_joint_4
+[ign-1] [INFO] [1789819261.305056424] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.305069256] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305078856] [gz_ros2_control]: 			 found initial value: -0.003254
+[ign-1] [INFO] [1789819261.305089097] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.305096777] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.305104329] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305141675] [gz_ros2_control]: Loading joint: right_gripper_joint_5
+[ign-1] [INFO] [1789819261.305166444] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.305179021] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305189517] [gz_ros2_control]: 			 found initial value: -1.072585
+[ign-1] [INFO] [1789819261.305200173] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.305208878] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.305217294] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305255056] [gz_ros2_control]: Loading joint: right_gripper_joint_6
+[ign-1] [INFO] [1789819261.305270352] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.305281041] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305290865] [gz_ros2_control]: 			 found initial value: 0.908795
+[ign-1] [INFO] [1789819261.305311762] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.305321042] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.305329651] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305365556] [gz_ros2_control]: Loading joint: right_gripper_joint_7
+[ign-1] [INFO] [1789819261.305384277] [gz_ros2_control]: 	State:
+[ign-1] [INFO] [1789819261.305397429] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305407542] [gz_ros2_control]: 			 found initial value: 0.298343
+[ign-1] [INFO] [1789819261.305417718] [gz_ros2_control]: 		 velocity
+[ign-1] [INFO] [1789819261.305425655] [gz_ros2_control]: 	Command:
+[ign-1] [INFO] [1789819261.305433751] [gz_ros2_control]: 		 position
+[ign-1] [INFO] [1789819261.305867817] [resource_manager]: Initialize hardware 'GazeboSystem' 
+[ign-1] [INFO] [1789819261.306074449] [resource_manager]: Successful initialization of hardware 'GazeboSystem'
+[ign-1] [INFO] [1789819261.306248536] [resource_manager]: 'configure' hardware 'GazeboSystem' 
+[ign-1] [INFO] [1789819261.306260953] [gz_ros2_control]: System Successfully configured!
+[ign-1] [INFO] [1789819261.306293466] [resource_manager]: Successful 'configure' of hardware 'GazeboSystem'
+[ign-1] [INFO] [1789819261.306323963] [resource_manager]: 'activate' hardware 'GazeboSystem' 
+[ign-1] [INFO] [1789819261.306343676] [resource_manager]: Successful 'activate' of hardware 'GazeboSystem'
+[ign-1] [INFO] [1789819261.306357213] [gz_ros2_control]: Loading controller_manager
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [WARN] [1789819261.403053761] [gz_ros2_control]:  Desired controller update period (0.01 s) is slower than the gazebo simulation period (0.001 s).
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] libEGL warning: MESA-LOADER: failed to open nvidia-drm: /usr/lib/dri/nvidia-drm_dri.so: cannot open shared object file: No such file or directory (search paths /usr/lib/aarch64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+[ign-1] 
+[ign-1] libEGL warning: MESA-LOADER: failed to open nvidia-drm: /usr/lib/dri/nvidia-drm_dri.so: cannot open shared object file: No such file or directory (search paths /usr/lib/aarch64-linux-gnu/dri:\$${ORIGIN}/dri:/usr/lib/dri, suffix _dri)
+[ign-1] 
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] libEGL warning: egl: failed to create dri2 screen
+[ign-1] libEGL warning: egl: failed to create dri2 screen
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [GUI] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [ColladaLoader.cc:2394] Triangle input semantic: 'COLOR' is currently not supported
+[ign-1] [Wrn] [Ogre2Camera.cc:390] Ogre2Camera::SetVisibilityMask: Mask bits c0000000 are set but will be ignored as they conflict with the reserved bits used internally by the ogre2 backend.
+[INFO] [python3-5]: process started with pid [303849]
+[INFO] [python3-6]: process started with pid [303851]
+[INFO] [python3-7]: process started with pid [303853]
+[python3-5] [INFO] [1789819263.503331953] [grasp_cube_action]: 日志文件：/home/adam/Team21/yjh/robo_ex3_linear_final/digital/logs/continuous_grasp_20260919_200103_303849.log
+[python3-5] [INFO] [1789819263.518111851] [grasp_cube_action]: STATE | current=INITIALIZE
+[python3-5] [INFO] [1789819263.580797030] [grasp_cube_action]: 执行: ros2 control list_controllers
+[INFO] [rqt_image_view-8]: process started with pid [303973]
+[python3-5] [INFO] [1789819266.617629993] [grasp_cube_action]: No controllers are currently loaded!
+[python3-5] [INFO] [1789819266.618827866] [grasp_cube_action]: 执行并动态加载 broadcaster: ros2 run controller_manager spawner joint_state_broadcaster --controller-manager /controller_manager
+[python3-6] [INFO] [1789819268.295930638] [bottle_tennis_yolo_detector]: Loading YOLO weight: /home/adam/Team21/yjh/robo_ex3_linear_final/digital/model/best.pt
+[ign-1] [INFO] [1789819268.696114881] [controller_manager]: Loading controller 'joint_state_broadcaster'
+[ign-1] [INFO] [1789819268.847626431] [controller_manager]: Configuring controller 'joint_state_broadcaster'
+[ign-1] [INFO] [1789819268.848052401] [joint_state_broadcaster]: 'joints' or 'interfaces' parameter is empty. All available state interfaces will be published
+[python3-6] [INFO] [1789819268.907854806] [bottle_tennis_yolo_detector]: Model classes: {0: 'bottle', 1: 'tennis_ball'}
+[python3-6] [INFO] [1789819268.908558610] [bottle_tennis_yolo_detector]: Task class mapping: {0: 'bottle', 1: 'tennis'}
+[python3-6] [INFO] [1789819269.084306540] [bottle_tennis_yolo_detector]: YOLO detector ready in paused state; awaiting acquire/align phase
+[python3-5] [INFO] [1789819269.593179980] [grasp_cube_action]: [INFO] [1789819268.817975207] [spawner_joint_state_broadcaster]: Loaded joint_state_broadcaster
+[python3-5] [INFO] [1789819269.077200618] [spawner_joint_state_broadcaster]: Configured and activated joint_state_broadcaster
+[python3-5] [INFO] [1789819269.594077136] [grasp_cube_action]: 执行: ros2 control list_controllers
+[python3-5] [INFO] [1789819271.931466719] [grasp_cube_action]: joint_state_broadcaster joint_state_broadcaster/JointStateBroadcaster  active
+[python3-5] [INFO] [1789819271.933488913] [grasp_cube_action]: 执行: ros2 control list_controllers
+[python3-5] [INFO] [1789819274.473363994] [grasp_cube_action]: [INFO] [1789819273.935981808] [_ros2cli_304111]: waiting for service /controller_manager/list_controllers to become available...
+[python3-5] joint_state_broadcaster joint_state_broadcaster/JointStateBroadcaster  active
+[python3-5] [INFO] [1789819274.476868041] [grasp_cube_action]: 执行: ros2 control unload_controller robomaster_position_hold_controller
+[ign-1] [ERROR] [1789819276.887675783] [controller_manager]: Could not unload controller with name 'robomaster_position_hold_controller' because no controller with this name exists
+[python3-5] [INFO] [1789819277.276456969] [grasp_cube_action]: [INFO] [1789819276.384567698] [_ros2cli_304148]: waiting for service /controller_manager/unload_controller to become available...
+[python3-5] Error unloading controllers, check controller_manager logs
+[python3-5] [INFO] [1789819277.277319949] [grasp_cube_action]: 没有可清除的 robomaster_position_hold_controller 残留实例，继续创建新控制器
+[python3-5] [INFO] [1789819277.277964167] [grasp_cube_action]: 执行: ros2 control list_controller_types
+[python3-5] [INFO] [1789819279.483337297] [grasp_cube_action]: controller_manager/test_controller                                     controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_failed_activate                     controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_failed_init                         controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_with_interfaces                     controller_interface::ControllerInterface
+[python3-5] diff_drive_controller/DiffDriveController                              controller_interface::ControllerInterface
+[python3-5] effort_controllers/GripperActionController                             controller_interface::ControllerInterface
+[python3-5] effort_controllers/JointGroupEffortController                          controller_interface::ControllerInterface
+[python3-5] force_torque_sensor_broadcaster/ForceTorqueSensorBroadcaster           controller_interface::ControllerInterface
+[python3-5] forward_command_controller/ForwardCommandController                    controller_interface::ControllerInterface
+[python3-5] forward_command_controller/MultiInterfaceForwardCommandController      controller_interface::ControllerInterface
+[python3-5] gpio_controllers/GpioCommandController                                 controller_interface::ControllerInterface
+[python3-5] imu_sensor_broadcaster/IMUSensorBroadcaster                            controller_interface::ControllerInterface
+[python3-5] joint_state_broadcaster/JointStateBroadcaster                          controller_interface::ControllerInterface
+[python3-5] joint_trajectory_controller/JointTrajectoryController                  controller_interface::ControllerInterface
+[python3-5] pose_broadcaster/PoseBroadcaster                                       controller_interface::ControllerInterface
+[python3-5] position_controllers/GripperActionController                           controller_interface::ControllerInterface
+[python3-5] position_controllers/JointGroupPositionController                      controller_interface::ControllerInterface
+[python3-5] range_sensor_broadcaster/RangeSensorBroadcaster                        controller_interface::ControllerInterface
+[python3-5] tricycle_controller/TricycleController                                 controller_interface::ControllerInterface
+[python3-5] velocity_controllers/JointGroupVelocityController                      controller_interface::ControllerInterface
+[python3-5] ackermann_steering_controller/AckermannSteeringController              controller_interface::ChainableControllerInterface
+[python3-5] admittance_controller/AdmittanceController                             controller_interface::ChainableControllerInterface
+[python3-5] bicycle_steering_controller/BicycleSteeringController                  controller_interface::ChainableControllerInterface
+[python3-5] controller_manager/test_chainable_controller                           controller_interface::ChainableControllerInterface
+[python3-5] mecanum_drive_controller/MecanumDriveController                        controller_interface::ChainableControllerInterface
+[python3-5] pid_controller/PidController                                           controller_interface::ChainableControllerInterface
+[python3-5] tricycle_steering_controller/TricycleSteeringController                controller_interface::ChainableControllerInterface
+[python3-5] [INFO] [1789819279.574078851] [grasp_cube_action]: 已注册 robomaster_position_hold_controller.type = forward_command_controller/ForwardCommandController
+[python3-5] [INFO] [1789819279.579628933] [grasp_cube_action]: 执行并动态激活: ros2 run controller_manager spawner robomaster_position_hold_controller --controller-manager /controller_manager --param-file /tmp/tmpgi_2bucv.yaml
+[ign-1] [INFO] [1789819281.924874835] [controller_manager]: Loading controller 'robomaster_position_hold_controller'
+[ign-1] [INFO] [1789819282.068500656] [controller_manager]: Configuring controller 'robomaster_position_hold_controller'
+[ign-1] [INFO] [1789819282.070633543] [robomaster_position_hold_controller]: configure successful
+[ign-1] [INFO] [1789819282.152293671] [robomaster_position_hold_controller]: activate successful
+[python3-5] [INFO] [1789819282.642916639] [grasp_cube_action]: [INFO] [1789819280.901194114] [spawner_robomaster_position_hold_controller]: waiting for service /controller_manager/list_controllers to become available...
+[python3-5] [INFO] [1789819281.912892811] [spawner_robomaster_position_hold_controller]: Setting controller param "params_file" to "['/tmp/tmpgi_2bucv.yaml']" for robomaster_position_hold_controller
+[python3-5] [INFO] [1789819281.983058742] [spawner_robomaster_position_hold_controller]: Loaded robomaster_position_hold_controller
+[python3-5] [INFO] [1789819282.196101632] [spawner_robomaster_position_hold_controller]: Configured and activated robomaster_position_hold_controller
+[python3-5] [INFO] [1789819282.644019340] [grasp_cube_action]: 执行: ros2 control list_controllers
+[python3-5] [INFO] [1789819284.858894810] [grasp_cube_action]: joint_state_broadcaster             joint_state_broadcaster/JointStateBroadcaster        active
+[python3-5] robomaster_position_hold_controller forward_command_controller/ForwardCommandController  active
+[python3-5] [INFO] [1789819284.908757514] [grasp_cube_action]: 执行: ros2 control list_controllers
+[python3-5] [INFO] [1789819287.140097046] [grasp_cube_action]: joint_state_broadcaster             joint_state_broadcaster/JointStateBroadcaster        active
+[python3-5] robomaster_position_hold_controller forward_command_controller/ForwardCommandController  active
+[python3-5] [INFO] [1789819287.140926488] [grasp_cube_action]: 执行: ros2 control unload_controller robomaster_wheel_velocity_controller
+[ign-1] [ERROR] [1789819289.243777137] [controller_manager]: Could not unload controller with name 'robomaster_wheel_velocity_controller' because no controller with this name exists
+[python3-5] [INFO] [1789819289.621894369] [grasp_cube_action]: [INFO] [1789819288.740968584] [_ros2cli_304392]: waiting for service /controller_manager/unload_controller to become available...
+[python3-5] Error unloading controllers, check controller_manager logs
+[python3-5] [INFO] [1789819289.622691681] [grasp_cube_action]: 没有可清除的 robomaster_wheel_velocity_controller 残留实例，继续创建新控制器
+[python3-5] [INFO] [1789819289.623238200] [grasp_cube_action]: 执行: ros2 control list_controller_types
+[python3-5] [INFO] [1789819292.050059554] [grasp_cube_action]: [INFO] [1789819291.106223206] [_ros2cli_304429]: waiting for service /controller_manager/list_controller_types to become available...
+[python3-5] controller_manager/test_controller                                     controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_failed_activate                     controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_failed_init                         controller_interface::ControllerInterface
+[python3-5] controller_manager/test_controller_with_interfaces                     controller_interface::ControllerInterface
+[python3-5] diff_drive_controller/DiffDriveController                              controller_interface::ControllerInterface
+[python3-5] effort_controllers/GripperActionController                             controller_interface::ControllerInterface
+[python3-5] effort_controllers/JointGroupEffortController                          controller_interface::ControllerInterface
+[python3-5] force_torque_sensor_broadcaster/ForceTorqueSensorBroadcaster           controller_interface::ControllerInterface
+[python3-5] forward_command_controller/ForwardCommandController                    controller_interface::ControllerInterface
+[python3-5] forward_command_controller/MultiInterfaceForwardCommandController      controller_interface::ControllerInterface
+[python3-5] gpio_controllers/GpioCommandController                                 controller_interface::ControllerInterface
+[python3-5] imu_sensor_broadcaster/IMUSensorBroadcaster                            controller_interface::ControllerInterface
+[python3-5] joint_state_broadcaster/JointStateBroadcaster                          controller_interface::ControllerInterface
+[python3-5] joint_trajectory_controller/JointTrajectoryController                  controller_interface::ControllerInterface
+[python3-5] pose_broadcaster/PoseBroadcaster                                       controller_interface::ControllerInterface
+[python3-5] position_controllers/GripperActionController                           controller_interface::ControllerInterface
+[python3-5] position_controllers/JointGroupPositionController                      controller_interface::ControllerInterface
+[python3-5] range_sensor_broadcaster/RangeSensorBroadcaster                        controller_interface::ControllerInterface
+[python3-5] tricycle_controller/TricycleController                                 controller_interface::ControllerInterface
+[python3-5] velocity_controllers/JointGroupVelocityController                      controller_interface::ControllerInterface
+[python3-5] ackermann_steering_controller/AckermannSteeringController              controller_interface::ChainableControllerInterface
+[python3-5] admittance_controller/AdmittanceController                             controller_interface::ChainableControllerInterface
+[python3-5] bicycle_steering_controller/BicycleSteeringController                  controller_interface::ChainableControllerInterface
+[python3-5] controller_manager/test_chainable_controller                           controller_interface::ChainableControllerInterface
+[python3-5] mecanum_drive_controller/MecanumDriveController                        controller_interface::ChainableControllerInterface
+[python3-5] pid_controller/PidController                                           controller_interface::ChainableControllerInterface
+[python3-5] tricycle_steering_controller/TricycleSteeringController                controller_interface::ChainableControllerInterface
+[python3-5] [INFO] [1789819292.136620041] [grasp_cube_action]: 已注册 robomaster_wheel_velocity_controller.type = forward_command_controller/ForwardCommandController
+[python3-5] [INFO] [1789819292.141340266] [grasp_cube_action]: 执行并动态激活: ros2 run controller_manager spawner robomaster_wheel_velocity_controller --controller-manager /controller_manager --param-file /tmp/tmptaexlbka.yaml
+[ign-1] [INFO] [1789819293.681805438] [controller_manager]: Loading controller 'robomaster_wheel_velocity_controller'
+[ign-1] [INFO] [1789819293.751111686] [controller_manager]: Configuring controller 'robomaster_wheel_velocity_controller'
+[ign-1] [INFO] [1789819293.752212083] [robomaster_wheel_velocity_controller]: configure successful
+[ign-1] [INFO] [1789819293.823627281] [robomaster_wheel_velocity_controller]: activate successful
+[python3-5] [INFO] [1789819294.428798885] [grasp_cube_action]: [INFO] [1789819293.671851464] [spawner_robomaster_wheel_velocity_controller]: Setting controller param "params_file" to "['/tmp/tmptaexlbka.yaml']" for robomaster_wheel_velocity_controller
+[python3-5] [INFO] [1789819293.748488315] [spawner_robomaster_wheel_velocity_controller]: Loaded robomaster_wheel_velocity_controller
+[python3-5] [INFO] [1789819293.875199079] [spawner_robomaster_wheel_velocity_controller]: Configured and activated robomaster_wheel_velocity_controller
+[python3-5] [INFO] [1789819294.429805454] [grasp_cube_action]: 执行: ros2 control list_controllers
+[python3-5] [INFO] [1789819296.418838537] [grasp_cube_action]: joint_state_broadcaster              joint_state_broadcaster/JointStateBroadcaster        active
+[python3-5] robomaster_position_hold_controller  forward_command_controller/ForwardCommandController  active
+[python3-5] robomaster_wheel_velocity_controller forward_command_controller/ForwardCommandController  active
+[parameter_bridge-3] [INFO] [1789819296.484315893] [ros_gz_bridge]: Passing message from ROS geometry_msgs/msg/Twist to Gazebo gz.msgs.Twist (showing msg only once per type)
+[python3-5] [INFO] [1789819297.168423002] [grasp_cube_action]: Gazebo 已进入连续运行模式
+[python3-5] [INFO] [1789819297.170416203] [grasp_cube_action]: 张开夹爪
+[python3-5] [INFO] [1789819298.387383105] [grasp_cube_action]: 空爪抬离物体
+[python3-5] [INFO] [1789819301.426091378] [grasp_cube_action]: ARM REACHED | 空爪抬离物体 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819301.434684176] [grasp_cube_action]: 空爪收回后才能横移
+[python3-5] [INFO] [1789819304.693918042] [grasp_cube_action]: ARM REACHED | 空爪收回后才能横移 | joint_error=0.0048 rad
+[python3-7] LINEAR SCENE READY | fixed cells=G1..G7 | G4=empty | tennis=3 bottle=3
+[python3-5] [INFO] [1789819315.557609686] [grasp_cube_action]: SORTING SCENE READY FOR VISION
+[INFO] [python3-7]: process has finished cleanly [pid 303853]
+[python3-5] [INFO] [1789819315.575596595] [grasp_cube_action]: CAMERA INFO READY | width=640 fx=320.00 cx=320.00
+[python3-5] [INFO] [1789819316.325716154] [grasp_cube_action]: SCAN PASS 1 | direction=right | sorted=0/6
+[python3-5] [INFO] [1789819316.331624298] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789819316.332132927] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-6] [INFO] [1789819316.489592591] [bottle_tennis_yolo_detector]: CAMERA FRAME READY | shape=640x480 | min=0 max=255 mean=202.8
+[python3-5] [INFO] [1789819317.035996425] [grasp_cube_action]: VISION WAIT | raw=0 | associated=0 | missed targets remain for return scan
+[python3-5] [INFO] [1789819320.073285471] [grasp_cube_action]: VISION WAIT | raw=0 | associated=0 | missed targets remain for return scan
+[python3-5] [INFO] [1789819320.851863565] [grasp_cube_action]: SCAN | y=0.900 -> -0.900 | sorted=0/6
+[python3-5] [INFO] [1789819321.189524269] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G1 | visual_y=0.898 | cell_y=0.90 | bbox_center=(320.2,232.8) | class=tennis | destination=left tennis area
+[python3-5] [INFO] [1789819322.052225855] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_0 | cell=G1 | class=tennis | confidence=0.910
+[python3-5] [INFO] [1789819322.059067830] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-5] [INFO] [1789819322.086797216] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-6] [INFO] [1789819322.316225605] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789819326.673212523] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819326.675948251] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789819330.609773926] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819330.611599344] [grasp_cube_action]: 张爪水平前插约2厘米
+[python3-5] [INFO] [1789819334.220789007] [grasp_cube_action]: ARM REACHED | 张爪水平前插约2厘米 | joint_error=0.0048 rad
+[python3-5] [INFO] [1789819335.143658357] [grasp_cube_action]: TENNIS GRIP PHASE 1/2 | curl front pads first | offset=0.280 rad
+[python3-5] [INFO] [1789819335.148080777] [grasp_cube_action]: 网球抓取阶段 1：指尖先内收形成挡球唇
+[python3-5] [INFO] [1789819337.104237961] [grasp_cube_action]: TENNIS TIP GUARD READY | roots remain open; settling before clamp
+[python3-5] [INFO] [1789819337.668704386] [grasp_cube_action]: TENNIS GRIP PHASE 2/2 | close roots slowly behind guarded ball
+[python3-5] [INFO] [1789819337.672924846] [grasp_cube_action]: 网球抓取阶段 2：根部缓慢合拢夹紧
+[python3-5] [INFO] [1789819346.725211509] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789819351.393042230] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789819351.410144303] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_0 | lift=0.045 m
+[python3-5] [INFO] [1789819351.439898060] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789819356.584652055] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819357.395053782] [grasp_cube_action]: 快速收臂 1/2
+[python3-5] [INFO] [1789819363.831906477] [grasp_cube_action]: ARM REACHED | 快速收臂 1/2 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819364.352161021] [grasp_cube_action]: 快速收臂 2/2
+[python3-5] [INFO] [1789819370.376509131] [grasp_cube_action]: ARM REACHED | 快速收臂 2/2 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819372.206314733] [grasp_cube_action]: CARRY RETRACTED | id=task_object_0 | destination_y=1.30
+[python3-5] [INFO] [1789819372.322635601] [grasp_cube_action]: LATERAL | y=0.898 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819375.398314244] [grasp_cube_action]: LATERAL | y=0.950 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819378.426612716] [grasp_cube_action]: LATERAL | y=1.056 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819381.585263604] [grasp_cube_action]: LATERAL | y=1.134 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819384.657022535] [grasp_cube_action]: LATERAL | y=1.197 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819387.736961479] [grasp_cube_action]: LATERAL | y=1.234 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819390.798151915] [grasp_cube_action]: LATERAL | y=1.254 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819393.825298756] [grasp_cube_action]: LATERAL | y=1.269 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819396.847671387] [grasp_cube_action]: LATERAL | y=1.278 -> 1.300 | sorted=0/6
+[python3-5] [INFO] [1789819398.008904498] [grasp_cube_action]: 仅竖直下放放置 1/1
+[python3-5] [INFO] [1789819403.894990942] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/1 | joint_error=0.0048 rad
+[python3-5] [INFO] [1789819405.304137995] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789819408.977249174] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789819413.930182521] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819414.023872131] [grasp_cube_action]: SORTED | total=1/6 | bottles=0/3 | tennis=1/3
+[python3-5] [INFO] [1789819414.028851214] [grasp_cube_action]: VISION PAUSED | reason=resume lateral scan
+[python3-5] [INFO] [1789819414.033818104] [grasp_cube_action]: FAST RESUME | completed_y=0.90 | next_scan_y=0.68
+[python3-5] [INFO] [1789819414.048833084] [grasp_cube_action]: LATERAL | y=1.280 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819417.082542209] [grasp_cube_action]: LATERAL | y=1.177 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819420.112979488] [grasp_cube_action]: LATERAL | y=0.956 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819423.141630838] [grasp_cube_action]: LATERAL | y=0.818 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819426.154424038] [grasp_cube_action]: LATERAL | y=0.758 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819429.167174165] [grasp_cube_action]: LATERAL | y=0.726 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819432.168165476] [grasp_cube_action]: LATERAL | y=0.707 -> 0.680 | sorted=1/6
+[python3-5] [INFO] [1789819434.469772640] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789819434.473668639] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-5] [INFO] [1789819435.177590283] [grasp_cube_action]: VISION WAIT | raw=0 | associated=0 | missed targets remain for return scan
+[python3-5] [INFO] [1789819435.202169812] [grasp_cube_action]: SCAN | y=0.700 -> -0.900 | sorted=1/6
+[python3-5] [INFO] [1789819438.230362264] [grasp_cube_action]: SCAN | y=0.677 -> -0.900 | sorted=1/6
+[python3-5] [INFO] [1789819441.269800806] [grasp_cube_action]: SCAN | y=0.656 -> -0.900 | sorted=1/6
+[python3-5] [INFO] [1789819441.506069474] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G2 | visual_y=0.591 | cell_y=0.60 | bbox_center=(390.2,169.1) | class=bottle | destination=right bottle area
+[python3-5] [INFO] [1789819441.593083067] [grasp_cube_action]: LATERAL | y=0.655 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819444.628766128] [grasp_cube_action]: LATERAL | y=0.632 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819447.635324386] [grasp_cube_action]: LATERAL | y=0.621 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819450.636384276] [grasp_cube_action]: LATERAL | y=0.614 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819453.712424694] [grasp_cube_action]: LATERAL | y=0.610 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819456.776679895] [grasp_cube_action]: LATERAL | y=0.607 -> 0.600 | sorted=1/6
+[python3-5] [INFO] [1789819459.076865817] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_1 | cell=G2 | class=bottle | confidence=0.669 | stable pre-alignment detection
+[python3-5] [INFO] [1789819459.080498285] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-6] [INFO] [1789819459.081122407] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789819459.115599907] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-5] [INFO] [1789819464.305212307] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819464.313580616] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789819468.081709139] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819468.816849399] [grasp_cube_action]: 水瓶闭爪
+[python3-5] [INFO] [1789819476.491212873] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789819480.538024657] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819480.546509098] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_1 | lift=0.024 m
+[python3-5] [INFO] [1789819480.557099098] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789819485.013518324] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819485.615164473] [grasp_cube_action]: 快速斜向安全收臂 1/1
+[python3-5] [INFO] [1789819490.916616693] [grasp_cube_action]: ARM REACHED | 快速斜向安全收臂 1/1 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819491.531663036] [grasp_cube_action]: BOTTLE RETRACT SAFE | dx=-0.080 | dz=-0.015
+[python3-5] [INFO] [1789819492.331459659] [grasp_cube_action]: CARRY RETRACTED | id=task_object_1 | destination_y=-1.30
+[python3-5] [INFO] [1789819492.426123068] [grasp_cube_action]: LATERAL | y=0.604 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819495.479083569] [grasp_cube_action]: LATERAL | y=0.497 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819498.585405925] [grasp_cube_action]: LATERAL | y=0.244 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819501.583710182] [grasp_cube_action]: LATERAL | y=-0.030 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819504.587167994] [grasp_cube_action]: LATERAL | y=-0.282 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819507.607723495] [grasp_cube_action]: LATERAL | y=-0.564 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819510.630750584] [grasp_cube_action]: LATERAL | y=-0.850 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819513.685869413] [grasp_cube_action]: LATERAL | y=-1.059 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819516.765558299] [grasp_cube_action]: LATERAL | y=-1.156 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819519.827612418] [grasp_cube_action]: LATERAL | y=-1.213 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819522.911027760] [grasp_cube_action]: LATERAL | y=-1.250 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819525.959595474] [grasp_cube_action]: LATERAL | y=-1.268 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819529.024213730] [grasp_cube_action]: LATERAL | y=-1.279 -> -1.300 | sorted=1/6
+[python3-5] [INFO] [1789819529.904365019] [grasp_cube_action]: 瓶区向前送出留出底盘回程间隙 1/1
+[python3-5] [INFO] [1789819534.965632893] [grasp_cube_action]: ARM REACHED | 瓶区向前送出留出底盘回程间隙 1/1 | joint_error=0.0048 rad
+[python3-5] [INFO] [1789819535.273279989] [grasp_cube_action]: BOTTLE DROP STANDOFF | forward=0.080 m | base corridor clear
+[python3-5] [INFO] [1789819535.286892896] [grasp_cube_action]: 仅竖直下放放置 1/2
+[python3-5] [INFO] [1789819539.318321076] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/2 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819539.828294369] [grasp_cube_action]: 仅竖直下放放置 2/2
+[python3-5] [INFO] [1789819544.213496677] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 2/2 | joint_error=0.0048 rad
+[python3-5] [INFO] [1789819545.444072070] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789819549.126621938] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789819552.583006590] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0049 rad
+[python3-5] [INFO] [1789819552.601677143] [grasp_cube_action]: 放瓶后完全收臂再允许回程
+[python3-5] [INFO] [1789819557.791170753] [grasp_cube_action]: ARM REACHED | 放瓶后完全收臂再允许回程 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819558.835295636] [grasp_cube_action]: BOTTLE DROP CLEAR | gripper fully retracted before base return
+[python3-5] [INFO] [1789819558.941206256] [grasp_cube_action]: SORTED | total=2/6 | bottles=1/3 | tennis=1/3
+[python3-5] [INFO] [1789819558.948370036] [grasp_cube_action]: VISION PAUSED | reason=resume lateral scan
+[python3-5] [INFO] [1789819558.957894520] [grasp_cube_action]: BOTTLE BASE CLEARANCE | y=-1.28->-1.04 | speed=0.28 m/s
+[python3-5] [INFO] [1789819559.028191113] [grasp_cube_action]: LATERAL | y=-1.280 -> -1.040 | sorted=2/6
+[python3-5] [INFO] [1789819562.053205291] [grasp_cube_action]: LATERAL | y=-1.189 -> -1.040 | sorted=2/6
+[python3-5] [INFO] [1789819565.077806268] [grasp_cube_action]: LATERAL | y=-1.122 -> -1.040 | sorted=2/6
+[python3-5] [INFO] [1789819568.108953016] [grasp_cube_action]: LATERAL | y=-1.085 -> -1.040 | sorted=2/6
+[python3-5] [INFO] [1789819571.124109480] [grasp_cube_action]: LATERAL | y=-1.067 -> -1.040 | sorted=2/6
+[python3-5] [INFO] [1789819573.337291697] [grasp_cube_action]: FAST RESUME | completed_y=0.60 | next_scan_y=0.38
+[python3-5] [INFO] [1789819573.399956971] [grasp_cube_action]: LATERAL | y=-1.060 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819576.404123483] [grasp_cube_action]: LATERAL | y=-0.965 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819579.424120049] [grasp_cube_action]: LATERAL | y=-0.679 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819582.480414542] [grasp_cube_action]: LATERAL | y=-0.276 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819585.515191614] [grasp_cube_action]: LATERAL | y=0.047 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819588.559961669] [grasp_cube_action]: LATERAL | y=0.226 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819591.584773311] [grasp_cube_action]: LATERAL | y=0.297 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819594.611336096] [grasp_cube_action]: LATERAL | y=0.334 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819597.618525196] [grasp_cube_action]: LATERAL | y=0.353 -> 0.380 | sorted=2/6
+[python3-5] [INFO] [1789819600.084160740] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789819600.084735740] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-5] [INFO] [1789819600.809783748] [grasp_cube_action]: VISION WAIT | raw=1 | associated=1 | missed targets remain for return scan
+[python3-5] [INFO] [1789819600.846598081] [grasp_cube_action]: SCAN | y=0.360 -> -0.900 | sorted=2/6
+[python3-5] [INFO] [1789819602.163482366] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G3 | visual_y=0.322 | cell_y=0.30 | bbox_center=(354.1,232.6) | class=tennis | destination=left tennis area
+[python3-5] [INFO] [1789819602.185527553] [grasp_cube_action]: LATERAL | y=0.352 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819605.190442544] [grasp_cube_action]: LATERAL | y=0.331 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819608.201581628] [grasp_cube_action]: LATERAL | y=0.321 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819611.230741736] [grasp_cube_action]: LATERAL | y=0.314 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819614.275426411] [grasp_cube_action]: LATERAL | y=0.310 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819617.297234827] [grasp_cube_action]: LATERAL | y=0.307 -> 0.300 | sorted=2/6
+[python3-5] [INFO] [1789819622.269885777] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_2 | cell=G3 | class=tennis | confidence=0.890
+[python3-5] [INFO] [1789819622.278029821] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-5] [INFO] [1789819622.300681720] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-6] [INFO] [1789819622.448952338] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789819627.439790557] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819627.444675332] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789819631.949239177] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819631.955907704] [grasp_cube_action]: 张爪水平前插约2厘米
+[python3-5] [INFO] [1789819636.219911986] [grasp_cube_action]: ARM REACHED | 张爪水平前插约2厘米 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819637.091892606] [grasp_cube_action]: TENNIS GRIP PHASE 1/2 | curl front pads first | offset=0.280 rad
+[python3-5] [INFO] [1789819637.095513842] [grasp_cube_action]: 网球抓取阶段 1：指尖先内收形成挡球唇
+[python3-5] [INFO] [1789819638.467982120] [grasp_cube_action]: TENNIS TIP GUARD READY | roots remain open; settling before clamp
+[python3-5] [INFO] [1789819639.008674809] [grasp_cube_action]: TENNIS GRIP PHASE 2/2 | close roots slowly behind guarded ball
+[python3-5] [INFO] [1789819639.009912332] [grasp_cube_action]: 网球抓取阶段 2：根部缓慢合拢夹紧
+[python3-5] [INFO] [1789819647.455603781] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789819652.381729123] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819652.390450022] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_2 | lift=0.045 m
+[python3-5] [INFO] [1789819652.407738663] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789819658.120844362] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789819659.072363871] [grasp_cube_action]: 快速收臂 1/2
+[python3-5] [INFO] [1789819664.647128189] [grasp_cube_action]: ARM REACHED | 快速收臂 1/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819665.257246491] [grasp_cube_action]: 快速收臂 2/2
+[python3-5] [INFO] [1789819670.552813800] [grasp_cube_action]: ARM REACHED | 快速收臂 2/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819671.515135349] [grasp_cube_action]: CARRY RETRACTED | id=task_object_2 | destination_y=1.60
+[python3-5] [INFO] [1789819671.590715517] [grasp_cube_action]: LATERAL | y=0.304 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819674.629077215] [grasp_cube_action]: LATERAL | y=0.378 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819677.639222979] [grasp_cube_action]: LATERAL | y=0.581 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819680.720893578] [grasp_cube_action]: LATERAL | y=0.812 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819683.721636879] [grasp_cube_action]: LATERAL | y=1.030 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819686.744176045] [grasp_cube_action]: LATERAL | y=1.241 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819689.826230979] [grasp_cube_action]: LATERAL | y=1.385 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819692.898911452] [grasp_cube_action]: LATERAL | y=1.461 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819695.972399925] [grasp_cube_action]: LATERAL | y=1.517 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819699.065697686] [grasp_cube_action]: LATERAL | y=1.549 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819702.117664770] [grasp_cube_action]: LATERAL | y=1.565 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819705.118471082] [grasp_cube_action]: LATERAL | y=1.576 -> 1.600 | sorted=2/6
+[python3-5] [INFO] [1789819706.777530495] [grasp_cube_action]: 仅竖直下放放置 1/1
+[python3-5] [INFO] [1789819713.062328450] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/1 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789819714.245186474] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789819718.291929838] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789819723.614952346] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819723.716061330] [grasp_cube_action]: SORTED | total=3/6 | bottles=1/3 | tennis=2/3
+[python3-5] [INFO] [1789819723.720574218] [grasp_cube_action]: VISION PAUSED | reason=resume lateral scan
+[python3-5] [INFO] [1789819723.729097957] [grasp_cube_action]: FAST RESUME | completed_y=0.30 | next_scan_y=0.08
+[python3-5] [INFO] [1789819723.779607471] [grasp_cube_action]: LATERAL | y=1.580 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819726.805753408] [grasp_cube_action]: LATERAL | y=1.492 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819729.838542591] [grasp_cube_action]: LATERAL | y=1.181 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819732.911199510] [grasp_cube_action]: LATERAL | y=0.797 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819735.959132830] [grasp_cube_action]: LATERAL | y=0.461 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819738.972866677] [grasp_cube_action]: LATERAL | y=0.281 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819742.029112655] [grasp_cube_action]: LATERAL | y=0.188 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819745.068367382] [grasp_cube_action]: LATERAL | y=0.141 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819748.074480278] [grasp_cube_action]: LATERAL | y=0.115 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819751.107202834] [grasp_cube_action]: LATERAL | y=0.102 -> 0.080 | sorted=3/6
+[python3-5] [INFO] [1789819752.100643348] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789819752.101945865] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-5] [INFO] [1789819752.826682789] [grasp_cube_action]: VISION WAIT | raw=0 | associated=0 | missed targets remain for return scan
+[python3-5] [INFO] [1789819752.877666979] [grasp_cube_action]: SCAN | y=0.100 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819755.881475269] [grasp_cube_action]: SCAN | y=0.078 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819758.899428551] [grasp_cube_action]: SCAN | y=0.058 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819762.002705854] [grasp_cube_action]: SCAN | y=0.036 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819764.577199530] [grasp_cube_action]: EMPTY GRID | cell=G4 | action=continue right
+[python3-5] [INFO] [1789819764.580205285] [grasp_cube_action]: EXCEPTION | type=empty_grid | cell=G4 | handled=continue_scan
+[python3-5] [INFO] [1789819765.074798239] [grasp_cube_action]: SCAN | y=0.014 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819768.095863872] [grasp_cube_action]: SCAN | y=-0.008 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819771.134950816] [grasp_cube_action]: SCAN | y=-0.030 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819774.201381946] [grasp_cube_action]: SCAN | y=-0.053 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819777.205312257] [grasp_cube_action]: SCAN | y=-0.072 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819780.209665241] [grasp_cube_action]: SCAN | y=-0.096 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819783.308340821] [grasp_cube_action]: SCAN | y=-0.110 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819786.334458820] [grasp_cube_action]: SCAN | y=-0.133 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819789.877265873] [grasp_cube_action]: SCAN | y=-0.156 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819792.892543335] [grasp_cube_action]: SCAN | y=-0.178 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819795.901110731] [grasp_cube_action]: SCAN | y=-0.200 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819798.908922736] [grasp_cube_action]: SCAN | y=-0.223 -> -0.900 | sorted=3/6
+[python3-5] [INFO] [1789819799.441883045] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G5 | visual_y=-0.310 | cell_y=-0.30 | bbox_center=(412.1,169.1) | class=bottle | destination=right bottle area
+[python3-5] [INFO] [1789819799.457669865] [grasp_cube_action]: LATERAL | y=-0.227 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819802.541040597] [grasp_cube_action]: LATERAL | y=-0.257 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819805.541641268] [grasp_cube_action]: LATERAL | y=-0.274 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819808.550460514] [grasp_cube_action]: LATERAL | y=-0.283 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819811.600627397] [grasp_cube_action]: LATERAL | y=-0.288 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819814.625328379] [grasp_cube_action]: LATERAL | y=-0.291 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819817.634151881] [grasp_cube_action]: LATERAL | y=-0.295 -> -0.300 | sorted=3/6
+[python3-5] [INFO] [1789819818.921480883] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_3 | cell=G5 | class=bottle | confidence=0.665 | stable pre-alignment detection
+[python3-5] [INFO] [1789819818.926376666] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-5] [INFO] [1789819818.949462983] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-6] [INFO] [1789819819.394869837] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789819823.241514519] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819823.247837977] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789819827.069049815] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819827.597043651] [grasp_cube_action]: 水瓶闭爪
+[python3-5] [INFO] [1789819834.017501757] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789819837.983679951] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819837.993407675] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_3 | lift=0.024 m
+[python3-5] [INFO] [1789819838.004266038] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789819842.764258371] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819843.112834111] [grasp_cube_action]: 快速斜向安全收臂 1/1
+[python3-5] [INFO] [1789819848.388956531] [grasp_cube_action]: ARM REACHED | 快速斜向安全收臂 1/1 | joint_error=0.0048 rad
+[python3-5] [INFO] [1789819848.892892394] [grasp_cube_action]: BOTTLE RETRACT SAFE | dx=-0.080 | dz=-0.015
+[python3-5] [INFO] [1789819849.978923849] [grasp_cube_action]: CARRY RETRACTED | id=task_object_3 | destination_y=-1.60
+[python3-5] [INFO] [1789819850.089605223] [grasp_cube_action]: LATERAL | y=-0.296 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819853.145296587] [grasp_cube_action]: LATERAL | y=-0.362 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819856.181864484] [grasp_cube_action]: LATERAL | y=-0.592 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819859.186355330] [grasp_cube_action]: LATERAL | y=-0.817 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819862.227358063] [grasp_cube_action]: LATERAL | y=-1.073 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819865.239286780] [grasp_cube_action]: LATERAL | y=-1.272 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819868.267489728] [grasp_cube_action]: LATERAL | y=-1.413 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819871.337007736] [grasp_cube_action]: LATERAL | y=-1.487 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819874.398272319] [grasp_cube_action]: LATERAL | y=-1.530 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819877.404943350] [grasp_cube_action]: LATERAL | y=-1.555 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819880.479453785] [grasp_cube_action]: LATERAL | y=-1.572 -> -1.600 | sorted=3/6
+[python3-5] [INFO] [1789819883.639766052] [grasp_cube_action]: 瓶区向前送出留出底盘回程间隙 1/1
+[python3-5] [INFO] [1789819889.322302090] [grasp_cube_action]: ARM REACHED | 瓶区向前送出留出底盘回程间隙 1/1 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789819889.886524217] [grasp_cube_action]: BOTTLE DROP STANDOFF | forward=0.080 m | base corridor clear
+[python3-5] [INFO] [1789819889.911071810] [grasp_cube_action]: 仅竖直下放放置 1/2
+[python3-5] [INFO] [1789819893.901473550] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819894.496655435] [grasp_cube_action]: 仅竖直下放放置 2/2
+[python3-5] [INFO] [1789819899.059165449] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 2/2 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789819900.324343275] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789819903.974090399] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789819908.637329573] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789819908.650465340] [grasp_cube_action]: 放瓶后完全收臂再允许回程
+[python3-5] [INFO] [1789819914.188939699] [grasp_cube_action]: ARM REACHED | 放瓶后完全收臂再允许回程 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819915.402337368] [grasp_cube_action]: BOTTLE DROP CLEAR | gripper fully retracted before base return
+[python3-5] [INFO] [1789819915.542305055] [grasp_cube_action]: SORTED | total=4/6 | bottles=2/3 | tennis=2/3
+[python3-5] [INFO] [1789819915.545987061] [grasp_cube_action]: VISION PAUSED | reason=resume lateral scan
+[python3-5] [INFO] [1789819915.549353087] [grasp_cube_action]: BOTTLE BASE CLEARANCE | y=-1.58->-1.34 | speed=0.28 m/s
+[python3-5] [INFO] [1789819915.605064829] [grasp_cube_action]: LATERAL | y=-1.580 -> -1.340 | sorted=4/6
+[python3-5] [INFO] [1789819918.652193604] [grasp_cube_action]: LATERAL | y=-1.483 -> -1.340 | sorted=4/6
+[python3-5] [INFO] [1789819921.657224728] [grasp_cube_action]: LATERAL | y=-1.410 -> -1.340 | sorted=4/6
+[python3-5] [INFO] [1789819924.665944994] [grasp_cube_action]: LATERAL | y=-1.380 -> -1.340 | sorted=4/6
+[python3-5] [INFO] [1789819927.710523841] [grasp_cube_action]: LATERAL | y=-1.364 -> -1.340 | sorted=4/6
+[python3-5] [INFO] [1789819929.058249608] [grasp_cube_action]: FAST RESUME | completed_y=-0.30 | next_scan_y=-0.52
+[python3-5] [INFO] [1789819929.150463957] [grasp_cube_action]: LATERAL | y=-1.360 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819932.206059030] [grasp_cube_action]: LATERAL | y=-1.239 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819935.238326719] [grasp_cube_action]: LATERAL | y=-0.918 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819938.301466707] [grasp_cube_action]: LATERAL | y=-0.734 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819941.400643939] [grasp_cube_action]: LATERAL | y=-0.645 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819944.433778544] [grasp_cube_action]: LATERAL | y=-0.588 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819947.461381980] [grasp_cube_action]: LATERAL | y=-0.559 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819950.467791112] [grasp_cube_action]: LATERAL | y=-0.544 -> -0.520 | sorted=4/6
+[python3-5] [INFO] [1789819951.764972835] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789819951.765521945] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-5] [INFO] [1789819952.474918724] [grasp_cube_action]: VISION WAIT | raw=1 | associated=1 | missed targets remain for return scan
+[python3-5] [INFO] [1789819952.513566571] [grasp_cube_action]: SCAN | y=-0.540 -> -0.900 | sorted=4/6
+[python3-5] [INFO] [1789819955.515857999] [grasp_cube_action]: SCAN | y=-0.560 -> -0.900 | sorted=4/6
+[python3-5] [INFO] [1789819960.781525018] [grasp_cube_action]: VISION WAIT | raw=1 | associated=1 | missed targets remain for return scan
+[python3-5] [INFO] [1789819960.788611867] [grasp_cube_action]: SCAN | y=-0.575 -> -0.900 | sorted=4/6
+[python3-5] [INFO] [1789819962.894519664] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G6 | visual_y=-0.598 | cell_y=-0.60 | bbox_center=(329.0,208.2) | class=bottle | destination=right bottle area
+[python3-5] [INFO] [1789819962.956963009] [grasp_cube_action]: LATERAL | y=-0.590 -> -0.600 | sorted=4/6
+[python3-5] [INFO] [1789819965.987735469] [grasp_cube_action]: LATERAL | y=-0.593 -> -0.600 | sorted=4/6
+[python3-5] [INFO] [1789819969.048481696] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_4 | cell=G6 | class=bottle | confidence=1.000 | stable pre-alignment detection
+[python3-5] [INFO] [1789819969.050704154] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-6] [INFO] [1789819969.051382390] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789819969.095357142] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-5] [INFO] [1789819973.930107433] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819973.941960620] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789819978.060901838] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789819978.734002450] [grasp_cube_action]: 水瓶闭爪
+[python3-5] [INFO] [1789819985.379605124] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789819989.254748312] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819989.258351531] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_4 | lift=0.024 m
+[python3-5] [INFO] [1789819989.267797227] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789819994.411626289] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789819994.874911503] [grasp_cube_action]: 快速斜向安全收臂 1/1
+[python3-5] [INFO] [1789820000.288907446] [grasp_cube_action]: ARM REACHED | 快速斜向安全收臂 1/1 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789820000.968708587] [grasp_cube_action]: BOTTLE RETRACT SAFE | dx=-0.080 | dz=-0.015
+[python3-5] [INFO] [1789820002.083176625] [grasp_cube_action]: CARRY RETRACTED | id=task_object_4 | destination_y=-1.90
+[python3-5] [INFO] [1789820002.193344122] [grasp_cube_action]: LATERAL | y=-0.596 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820005.196582149] [grasp_cube_action]: LATERAL | y=-0.655 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820008.253070697] [grasp_cube_action]: LATERAL | y=-0.868 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820011.351504987] [grasp_cube_action]: LATERAL | y=-1.136 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820014.414960732] [grasp_cube_action]: LATERAL | y=-1.386 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820017.425288872] [grasp_cube_action]: LATERAL | y=-1.599 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820020.475437770] [grasp_cube_action]: LATERAL | y=-1.719 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820023.489853884] [grasp_cube_action]: LATERAL | y=-1.801 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820026.513028435] [grasp_cube_action]: LATERAL | y=-1.842 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820029.549508777] [grasp_cube_action]: LATERAL | y=-1.863 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820032.589242435] [grasp_cube_action]: LATERAL | y=-1.877 -> -1.900 | sorted=4/6
+[python3-5] [INFO] [1789820033.883419587] [grasp_cube_action]: 瓶区向前送出留出底盘回程间隙 1/1
+[python3-5] [INFO] [1789820039.068162604] [grasp_cube_action]: ARM REACHED | 瓶区向前送出留出底盘回程间隙 1/1 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789820039.512617387] [grasp_cube_action]: BOTTLE DROP STANDOFF | forward=0.080 m | base corridor clear
+[python3-5] [INFO] [1789820039.533515774] [grasp_cube_action]: 仅竖直下放放置 1/2
+[python3-5] [INFO] [1789820043.789910658] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820044.189811370] [grasp_cube_action]: 仅竖直下放放置 2/2
+[python3-5] [INFO] [1789820048.259399313] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 2/2 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789820049.555859118] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789820053.596288530] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789820057.608539577] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820057.622501266] [grasp_cube_action]: 放瓶后完全收臂再允许回程
+[python3-5] [INFO] [1789820062.499188369] [grasp_cube_action]: ARM REACHED | 放瓶后完全收臂再允许回程 | joint_error=0.0044 rad
+[python3-5] [INFO] [1789820063.520506371] [grasp_cube_action]: BOTTLE DROP CLEAR | gripper fully retracted before base return
+[python3-5] [INFO] [1789820063.612915289] [grasp_cube_action]: SORTED | total=5/6 | bottles=3/3 | tennis=2/3
+[python3-5] [INFO] [1789820063.618027529] [grasp_cube_action]: VISION PAUSED | reason=resume lateral scan
+[python3-5] [INFO] [1789820063.638941501] [grasp_cube_action]: BOTTLE BASE CLEARANCE | y=-1.88->-1.64 | speed=0.28 m/s
+[python3-5] [INFO] [1789820063.648155093] [grasp_cube_action]: LATERAL | y=-1.880 -> -1.640 | sorted=5/6
+[python3-5] [INFO] [1789820066.698319192] [grasp_cube_action]: LATERAL | y=-1.801 -> -1.640 | sorted=5/6
+[python3-5] [INFO] [1789820069.767811374] [grasp_cube_action]: LATERAL | y=-1.729 -> -1.640 | sorted=5/6
+[python3-5] [INFO] [1789820072.817084333] [grasp_cube_action]: LATERAL | y=-1.684 -> -1.640 | sorted=5/6
+[python3-5] [INFO] [1789820075.863240300] [grasp_cube_action]: LATERAL | y=-1.668 -> -1.640 | sorted=5/6
+[python3-5] [INFO] [1789820077.489636590] [grasp_cube_action]: FAST RESUME | completed_y=-0.60 | next_scan_y=-0.82
+[python3-5] [INFO] [1789820077.532150099] [grasp_cube_action]: LATERAL | y=-1.660 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820080.587202109] [grasp_cube_action]: LATERAL | y=-1.534 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820083.639589210] [grasp_cube_action]: LATERAL | y=-1.254 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820086.679735077] [grasp_cube_action]: LATERAL | y=-1.034 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820089.693592417] [grasp_cube_action]: LATERAL | y=-0.937 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820092.715920341] [grasp_cube_action]: LATERAL | y=-0.883 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820095.753970187] [grasp_cube_action]: LATERAL | y=-0.855 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820098.774471157] [grasp_cube_action]: LATERAL | y=-0.842 -> -0.820 | sorted=5/6
+[python3-5] [INFO] [1789820099.302513410] [grasp_cube_action]: VISION ENABLED | reason=lateral scan
+[python3-6] [INFO] [1789820099.303232991] [bottle_tennis_yolo_detector]: YOLO ENABLED BY SORTING STATE
+[python3-5] [INFO] [1789820100.009021304] [grasp_cube_action]: VISION WAIT | raw=2 | associated=0 | missed targets remain for return scan
+[python3-5] [INFO] [1789820100.033842187] [grasp_cube_action]: SCAN | y=-0.840 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820100.750178449] [grasp_cube_action]: GRID MAPPING | source=bbox_center | cell=G7 | visual_y=-0.877 | cell_y=-0.90 | bbox_center=(358.2,232.1) | class=tennis | destination=left tennis area
+[python3-5] [INFO] [1789820100.814555696] [grasp_cube_action]: LATERAL | y=-0.843 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820103.857220578] [grasp_cube_action]: LATERAL | y=-0.861 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820106.906779276] [grasp_cube_action]: LATERAL | y=-0.875 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820109.970207243] [grasp_cube_action]: LATERAL | y=-0.884 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820112.988388087] [grasp_cube_action]: LATERAL | y=-0.888 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820115.991669316] [grasp_cube_action]: LATERAL | y=-0.892 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820119.012269106] [grasp_cube_action]: LATERAL | y=-0.895 -> -0.900 | sorted=5/6
+[python3-5] [INFO] [1789820121.279297037] [grasp_cube_action]: LINEAR TARGET LOCK | id=task_object_5 | cell=G7 | class=tennis | confidence=0.890
+[python3-5] [INFO] [1789820121.290108357] [grasp_cube_action]: VISION PAUSED | reason=physical grasp and transport
+[python3-5] [INFO] [1789820121.313738600] [grasp_cube_action]: 快速伸臂到目标上方
+[python3-6] [INFO] [1789820121.794549617] [bottle_tennis_yolo_detector]: YOLO PAUSED BY SORTING STATE
+[python3-5] [INFO] [1789820127.239185208] [grasp_cube_action]: ARM REACHED | 快速伸臂到目标上方 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820127.242381562] [grasp_cube_action]: 快速下降到标定抓取高度
+[python3-5] [INFO] [1789820131.835986379] [grasp_cube_action]: ARM REACHED | 快速下降到标定抓取高度 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789820131.847014092] [grasp_cube_action]: 张爪水平前插约2厘米
+[python3-5] [INFO] [1789820135.544296305] [grasp_cube_action]: ARM REACHED | 张爪水平前插约2厘米 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820136.658788343] [grasp_cube_action]: TENNIS GRIP PHASE 1/2 | curl front pads first | offset=0.280 rad
+[python3-5] [INFO] [1789820136.687351715] [grasp_cube_action]: 网球抓取阶段 1：指尖先内收形成挡球唇
+[python3-5] [INFO] [1789820138.616869093] [grasp_cube_action]: TENNIS TIP GUARD READY | roots remain open; settling before clamp
+[python3-5] [INFO] [1789820139.222218048] [grasp_cube_action]: TENNIS GRIP PHASE 2/2 | close roots slowly behind guarded ball
+[python3-5] [INFO] [1789820139.225996570] [grasp_cube_action]: 网球抓取阶段 2：根部缓慢合拢夹紧
+[python3-5] [INFO] [1789820148.134366521] [grasp_cube_action]: 小幅试抬
+[python3-5] [INFO] [1789820152.844946376] [grasp_cube_action]: ARM REACHED | 小幅试抬 | joint_error=0.0047 rad
+[python3-5] [INFO] [1789820152.867377850] [grasp_cube_action]: REAL GRASP VERIFIED | id=task_object_5 | lift=0.045 m
+[python3-5] [INFO] [1789820152.876980353] [grasp_cube_action]: 快速持物抬高 1/1
+[python3-5] [INFO] [1789820157.616168926] [grasp_cube_action]: ARM REACHED | 快速持物抬高 1/1 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789820158.314454341] [grasp_cube_action]: 快速收臂 1/2
+[python3-5] [INFO] [1789820163.747200487] [grasp_cube_action]: ARM REACHED | 快速收臂 1/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820164.327915415] [grasp_cube_action]: 快速收臂 2/2
+[python3-5] [INFO] [1789820169.636756480] [grasp_cube_action]: ARM REACHED | 快速收臂 2/2 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820171.029934819] [grasp_cube_action]: CARRY RETRACTED | id=task_object_5 | destination_y=1.90
+[python3-5] [INFO] [1789820171.109510382] [grasp_cube_action]: LATERAL | y=-0.896 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820174.162341917] [grasp_cube_action]: LATERAL | y=-0.841 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820177.236986790] [grasp_cube_action]: LATERAL | y=-0.663 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820180.306163984] [grasp_cube_action]: LATERAL | y=-0.439 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820183.327431129] [grasp_cube_action]: LATERAL | y=-0.254 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820186.335102808] [grasp_cube_action]: LATERAL | y=-0.057 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820189.378857398] [grasp_cube_action]: LATERAL | y=0.148 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820192.413813005] [grasp_cube_action]: LATERAL | y=0.373 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820195.476154881] [grasp_cube_action]: LATERAL | y=0.570 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820198.519215938] [grasp_cube_action]: LATERAL | y=0.776 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820201.535961235] [grasp_cube_action]: LATERAL | y=0.941 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820204.559259600] [grasp_cube_action]: LATERAL | y=1.153 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820207.646656256] [grasp_cube_action]: LATERAL | y=1.365 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820210.660760645] [grasp_cube_action]: LATERAL | y=1.571 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820213.768839840] [grasp_cube_action]: LATERAL | y=1.694 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820216.903238700] [grasp_cube_action]: LATERAL | y=1.776 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820219.956398793] [grasp_cube_action]: LATERAL | y=1.824 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820222.962845078] [grasp_cube_action]: LATERAL | y=1.851 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820225.995522897] [grasp_cube_action]: LATERAL | y=1.867 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820229.028285711] [grasp_cube_action]: LATERAL | y=1.877 -> 1.900 | sorted=5/6
+[python3-5] [INFO] [1789820230.797868507] [grasp_cube_action]: 仅竖直下放放置 1/1
+[python3-5] [INFO] [1789820236.912848694] [grasp_cube_action]: ARM REACHED | 仅竖直下放放置 1/1 | joint_error=0.0045 rad
+[python3-5] [INFO] [1789820238.022375634] [grasp_cube_action]: 快速释放物品
+[python3-5] [INFO] [1789820241.868436613] [grasp_cube_action]: 释放后仅竖直抬起
+[python3-5] [INFO] [1789820246.527259895] [grasp_cube_action]: ARM REACHED | 释放后仅竖直抬起 | joint_error=0.0046 rad
+[python3-5] [INFO] [1789820246.636255953] [grasp_cube_action]: SORTED | total=6/6 | bottles=3/3 | tennis=3/3
+[python3-5] [INFO] [1789820246.643606972] [grasp_cube_action]: VISION PAUSED | reason=six verified releases
+[python3-5] [INFO] [1789820246.648058514] [grasp_cube_action]: LINEAR SORTING COMPLETE | tennis=3 | bottle=3 | total=6/6
+[python3-5] [INFO] [1789820248.032361227] [grasp_cube_action]: Gazebo 已暂停
+[INFO] [python3-5]: process has finished cleanly [pid 303849]
+[INFO] [rqt_image_view-8]: sending signal 'SIGINT' to process[rqt_image_view-8]
+[INFO] [python3-6]: sending signal 'SIGINT' to process[python3-6]
+[INFO] [parameter_bridge-3]: sending signal 'SIGINT' to process[parameter_bridge-3]
+[INFO] [robot_state_publisher-2]: sending signal 'SIGINT' to process[robot_state_publisher-2]
+[INFO] [ign-1]: sending signal 'SIGINT' to process[ign-1]
+[rqt_image_view-8] [INFO] [1789820248.353342242] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[parameter_bridge-3] [INFO] [1789820248.359358615] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[robot_state_publisher-2] [INFO] [1789820248.361100382] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[INFO] [robot_state_publisher-2]: process has finished cleanly [pid 303631]
+[INFO] [parameter_bridge-3]: process has finished cleanly [pid 303633]
+[INFO] [python3-6]: process has finished cleanly [pid 303851]
+[INFO] [rqt_image_view-8]: process has finished cleanly [pid 303973]
+[ign-1] [INFO] [1789820249.084863475] [rclcpp]: signal_handler(SIGINT/SIGTERM)
+[ign-1] [INFO] [1789820249.085108893] [controller_manager]: Shutdown request received....
+[ign-1] [INFO] [1789820249.085554255] [controller_manager]: Shutting down all controllers in the controller manager.
+[ign-1] [INFO] [1789820249.085709749] [controller_manager]: Deactivating controller 'joint_state_broadcaster'
+[ign-1] [INFO] [1789820249.085859964] [controller_manager]: Shutting down controller 'joint_state_broadcaster'
+[ign-1] [INFO] [1789820249.085952991] [controller_manager]: Deactivating controller 'robomaster_position_hold_controller'
+[ign-1] [INFO] [1789820249.086030211] [controller_manager]: Shutting down controller 'robomaster_position_hold_controller'
+[ign-1] [INFO] [1789820249.086068644] [controller_manager]: Deactivating controller 'robomaster_wheel_velocity_controller'
+[ign-1] [INFO] [1789820249.086108038] [controller_manager]: Shutting down controller 'robomaster_wheel_velocity_controller'
+[ign-1] [INFO] [1789820249.086173896] [resource_manager]: 'deactivate' hardware 'GazeboSystem' 
+[ign-1] [INFO] [1789820249.086218474] [resource_manager]: Successful 'deactivate' of hardware 'GazeboSystem'
+[ign-1] [INFO] [1789820249.086230891] [resource_manager]: 'shutdown' hardware 'GazeboSystem' 
+[ign-1] [INFO] [1789820249.086298861] [resource_manager]: Successful 'shutdown' of hardware 'GazeboSystem'
+[ign-1] [INFO] [1789820249.086325935] [controller_manager]: Shutting down the controller manager.
+[INFO] [ign-1]: process has finished cleanly [pid 303629]
+任务退出码：0；日志：/home/adam/Team21/yjh/robo_ex3_linear_final/digital/logs
+Connection to 10.140.247.161 closed.
+(base) shanyudejitabopian@shanyudejitabopiandeMacBook-
