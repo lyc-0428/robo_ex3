@@ -1,1385 +1,310 @@
-# 机械臂定点抓取与放置系统
+# 实验 3：桌面物体自动分类整理
 
-## ROS 2 Humble · Gazebo Fortress · MoveIt 2 · ros2_control · 仿真开发与真机验证
+本仓库实现了 RoboMaster EP 小车对网球和水瓶的视觉识别、自动抓取与分类放置，包含 Gazebo 仿真系统和 Jetson 真机程序。
 
-**机器人集成小组项目Ⅰ｜机械臂定点抓取实验**
-
-项目仓库：
+当前正式真机版本位于 `real/minified`，版本标识为：
 
 ```text
-https://github.com/X-u-e-B-a-o/robomaster-pick-place-sim
+V10 RESTORED-MOTION-COUNT-ONLY
+BUILD: RESTORED-MOTION-COUNT-ONLY
 ```
 
----
+> 安全提示：真机程序会直接控制底盘、机械臂和夹爪。首次运行应架空车轮或清空运动区域，并准备随时按 `Q`、`Esc` 或 `Ctrl+C` 停止。
 
-## 0. README 说明与实验数据口径
+## 1. 实验任务
 
-本 README 根据课程《机械臂定点抓取》实验要求、仓库 `main` / `real-ep-arm` 等分支中的程序与配置，以及当前已保存的实验材料进行整理。
+课程要求机器人自动完成“识别、判断、抓取、分类、异常处理”任务链：
 
-本文严格区分三类证据：
+- 自动识别不少于 2 类物体；
+- 在 4 至 6 个固定取物位置中判断物体类别；
+- 测试 6 个物体，至少正确整理 5 个；
+- 正常任务中不人工指定类别、抓取位置或放置区域；
+- 跳过空位置和未识别物体；
+- 抓取失败、目标不可达或传感器异常时安全恢复或停止；
+- 保存识别、抓取、放置和状态日志；
+- 仿真由一个 Launch 文件启动完整系统。
 
-1. **程序实现**：代码已经实现的功能，例如 5 次循环、IK/FK 检查、路径预规划、错误处理和日志保存。
-2. **静态可验证结果**：可由当前参数和运动学模型直接复算的结果，例如 A/B 点是否存在解析逆解、关节角是否位于限制范围内。
-3. **实际运行结果**：必须来自某一次真实运行保存的 `run_*_results.json`、轨迹 CSV、完整日志或连续实验视频。
+本项目使用的类别和分类方向为：
 
-当前仓库和已上传材料能够确认完整的软件实现与静态运动学验证，但**未发现一组可独立核验的“仿真 5 次正式抓取结果文件”以及“真机 5 次正式抓取结果文件”**。因此本文不会把“程序设置了 5 次循环”写成“实际 5/5 成功”，也不会虚构 Trial 成功记录。第 16、26 节将五次验收表按当前证据状态完整填写。
+| 模型类别 | 中文名称 | 真机分类方向 |
+| --- | --- | --- |
+| `tennis_ball` | 网球 | 左侧 |
+| `bottle` | 水瓶 | 右侧 |
 
----
+## 2. 系统组成
 
-# 1. 实验目标
+### 2.1 仿真系统
 
-本实验要求实现机械臂固定位置抓取与放置：目标物位于固定取物点 **A**，机械臂完成抓取后将目标物移动到固定放置区域 **B**。实验重点是机械臂控制与系统集成，不考查视觉定位。
+仿真代码位于 `digital/`，使用 ROS 2 Humble、Gazebo Fortress、`ros2_control` 和 YOLO。单个 Launch 文件会启动：
 
-完整动作流程为：
+1. RoboMaster EP、机械臂、夹爪和相机模型；
+2. Gazebo 与 ROS 图像桥接；
+3. 六物体随机场景；
+4. YOLO 检测节点；
+5. 抓取与分类状态机；
+6. 检测画面和运行日志。
+
+主状态机为：
 
 ```text
-Home
-  ↓
-Pre-Pick
-  ↓
-Pick A
-  ↓
-Close Gripper
-  ↓
-Lift
-  ↓
-Pre-Place
-  ↓
-Place B
-  ↓
-Release
-  ↓
-Withdraw
-  ↓
-Home
+INITIALIZE -> WAIT_SCENE -> ACQUIRE -> ALIGN -> APPROACH
+           -> GRASP -> RETREAT -> PLACE -> VERIFY
+           -> RETURN_HOME -> RECORD -> ACQUIRE / DONE
 ```
 
-课程验收要求为：
+任一关键动作失败时进入 `SAFE_STOP`。仿真提供 `nominal`、`unknown` 和 `empty` 场景，分别用于正常六物体任务、未识别物体和空场景测试。
+
+### 2.2 真机系统
+
+真机程序位于 `real/minified/`，通过 RoboMaster Python SDK 直接控制 EP。V10 的主要流程如下：
 
 ```text
-连续抓取 5 次
-至少成功 4 次
+连接小车并启动 640 x 360 视频
+  -> YOLO 同时识别网球和水瓶
+  -> 在画面中央 ROI 中选择 bottom_y 最大的最近目标
+  -> 观察姿态靠近并对准
+  -> 切换到对应类别的标定抓取姿态
+  -> 近距离闭环修正并夹取、抬升
+  -> 回到运输姿态，后退 0.15 m 并恢复航向
+  -> 网球向左平移，水瓶向右平移
+  -> 黑色胶带持续消失后停止平移
+  -> 前进 0.15 m、降低机械臂、释放物体
+  -> 后退 0.15 m
+  -> 从放置区反方向开始横向搜索下一个目标
+  -> 完成一次往返搜索且无可执行目标后结束
 ```
 
-因此：
+真机视觉只保留画面中间 50% 区域，左右各 25% 被屏蔽，减少一次同时看到多个目标的概率。如果仍有多个检测框，则选择视觉上最近的目标。
 
-\[
-N_{\mathrm{success}}\geq 4,\qquad N_{\mathrm{trial}}=5
-\]
+黑色胶带使用灰度二值化检测，运行时会额外显示 `Black Marker Binary` 黑白窗口。当前主要参数为：
 
-\[
-\mathrm{SuccessRate}
-=
-\frac{N_{\mathrm{success}}}{5}\times100\%
-\geq80\%
-\]
+| 参数 | 当前值 | 作用 |
+| --- | ---: | --- |
+| `BLACK_GRAY_THRESHOLD` | `60` | 灰度小于阈值的像素作为黑色候选 |
+| `BLACK_MIN_AREA` / `BLACK_MAX_AREA` | `250` / `6500` | 黑色标记面积范围 |
+| `ROI_LEFT_RATIO` / `ROI_RIGHT_RATIO` | `0.25` / `0.75` | 中央视觉区域 |
+| `STABLE_WINDOW` / `STABLE_HITS` | `5` / `3` | 稳定识别判定 |
+| `CONF_BALL` | `0.35` | 网球检测阈值 |
+| `CONF_BOTTLE` | `0.25` | 水瓶检测阈值 |
+| `POST_GRASP_BACK_M` | `0.15 m` | 抓取后的安全后退距离 |
+| `POST_DROP_BACK_M` | `0.15 m` | 放置后的安全后退距离 |
 
-此外，系统需要满足：
+网球和水瓶的最终抓取位置分别来自 `grasp_profile_tennis_ball_arm.json` 和 `grasp_profile_bottle_arm.json`。加载时程序会把 SDK 返回的无符号坐标转换为有符号坐标。
 
-- 不发生明显桌面碰撞、自碰撞或目标物危险碰撞；
-- 不超过机械臂关节限位；
-- 不可达、无逆解或规划失败时安全停止；
-- 保存机械臂轨迹、执行结果和错误日志；
-- 真机阶段复用仿真阶段的任务逻辑，仅替换设备、通信、运动学和位置参数。
-
----
-
-# 2. 项目总体设计
-
-本项目采用分层设计，将任务层、运动学层、规划层和设备层分离。
+## 3. 目录结构
 
 ```text
-Task Parameters
-A / B / Home / Safe Height / Gripper
-                 │
-                 ▼
-        pick_place_moveit
-        Unified Task Logic
-                 │
-       ┌─────────┴─────────┐
-       ▼                   ▼
-Analytical IK          MoveIt 2
-robot_kinematics       FK / OMPL
-       │                   │
-       └─────────┬─────────┘
-                 ▼
-          ROS 2 Interface
-                 │
-      ┌──────────┴──────────┐
-      ▼                     ▼
-Gazebo Simulation      Hardware Adapter
-ros2_control           EP / other robot
-      │                     │
-      ▼                     ▼
-Simulated Robot        Physical Robot
-
-                 │
-                 ▼
-        Log / CSV / JSON
+robo_ex3-main/
+├── README.md                          # 本说明
+├── ACTIVE_VERSION.md                  # 当前正式版本说明
+├── bottle_tennisball_best.pt          # YOLO 权重副本
+├── digital/                           # ROS 2 / Gazebo 仿真
+│   ├── actions/                       # 检测、抓取、状态机和场景逻辑
+│   ├── model/best.pt                  # 仿真运行时权重
+│   ├── models/                        # Gazebo 物体模型
+│   ├── src/robomaster_pick_place_sim/ # ROS 2 package、Launch、URDF、参数
+│   ├── tests/                         # 纯 Python 静态测试
+│   ├── activate_team21.sh             # 环境加载脚本
+│   └── run_vision_sorting_improved.sh # 仿真主入口
+├── real/minified/                     # 当前真机 V10
+│   ├── vision/grasp_v10.py            # 视觉、导航、抓取和分拣主程序
+│   ├── real/pick_place_lua_params.py  # 实验二夹爪与机械臂逻辑
+│   ├── bottle_tennisball_best.pt      # 真机 YOLO 权重
+│   ├── grasp_profile_*.json           # 两类物体的抓取标定
+│   ├── run_grasp_v10.sh               # Jetson 运行脚本
+│   └── install_mac.sh                 # Mac 到 Jetson 的部署脚本
+├── model/                             # 模型与物体资源
+├── test/                              # 历史测试快照
+└── try/                               # 开发过程与调试版本
 ```
 
-该架构的核心思想是：
+正式运行应优先使用 `digital/` 和 `real/minified/`。`test/`、`try/`、`new_lpx/` 等目录用于保留开发过程，不是当前入口。
 
-> **Task Logic Reuse + Device Layer Replacement**
-
-即仿真和真机尽量共用同一任务状态机，而不是切换设备后重写整个抓取程序。
-
----
-
-# 3. Git 分支与版本关系
-
-仓库中存在多个开发阶段。
-
-## 3.1 `main`
-
-主要包含：
-
-- ROS 2 仿真 package；
-- Gazebo world；
-- RoboMaster EP/Core URDF 与 mesh；
-- MoveIt 2 配置；
-- 参数文件；
-- `lpx/` 后期更新实现；
-- 静态模型快照。
-
-## 3.2 `real-ep-arm`
-
-该分支用于 RoboMaster EP 真机适配，包含：
+仓库中的四份 `bottle_tennisball_best.pt` 内容一致，SHA-256 为：
 
 ```text
-robomaster_ep_driver/
-├── config/
-│   ├── ep_driver_params.yaml
-│   └── pick_place_params_real.yaml
-├── launch/
-│   └── pick_place_real.launch.py
-└── robomaster_ep_driver/
-    ├── ep_arm_driver.py
-    └── calibrate_real.py
-
-docs/
-└── real_machine_runbook.md
+9f1e151909ce6fe1dc835cf362c8297aa20ce1686e29c54a7403f54e6ff1d603
 ```
 
-其设计目标是把 RoboMaster SDK 封装为与仿真阶段相近的 ROS 2 控制接口，使高层 `pick_place_moveit` 任务节点能够复用。
+## 4. 环境要求
 
-## 3.3 `lpx/`
+### 4.1 仿真
 
-`main/lpx/` 保存了较完整的后期实现，包括：
+- Ubuntu 22.04
+- ROS 2 Humble
+- Gazebo Fortress / Ignition Gazebo
+- `ros_gz_bridge` 或 `ros_ign_bridge`
+- `ros2_control`、`gz_ros2_control`
+- Python 3、PyTorch、Ultralytics、OpenCV、NumPy `< 2`
+- Jetson 本地图形桌面，用于 Gazebo 和检测窗口
 
-```text
-pick_place_moveit.py
-robot_kinematics.py
-calibrate_pose.py
-test_joints.py
-robomaster_ep_driver/
-```
-
-最终提交前建议将已经验证的最终实现统一到一个 canonical package，避免根目录和 `lpx/` 同时存在行为不同的版本。
-
----
-
-# 4. 推荐项目结构
-
-```text
-robomaster-pick-place-sim/
-│
-├── README.md
-├── package.xml
-├── setup.py
-├── setup.cfg
-│
-├── config/
-│   ├── controllers.yaml
-│   └── pick_place_params.yaml
-│
-├── launch/
-│   ├── pick_place_gazebo.launch.py
-│   └── pick_place_moveit.launch.py
-│
-├── worlds/
-│   └── pick_place.sdf
-│
-├── urdf/
-│   └── robomaster_ep_gazebo.urdf
-│
-├── meshes/
-│   └── ...
-│
-├── robomaster_pick_place_sim/
-│   ├── __init__.py
-│   ├── pick_place_moveit.py
-│   ├── robot_kinematics.py
-│   ├── calibrate_pose.py
-│   └── test_joints.py
-│
-├── robomaster_ep_moveit_config/
-│   ├── config/
-│   ├── launch/
-│   └── rviz/
-│
-├── robomaster_ep_driver/
-│   ├── config/
-│   │   ├── ep_driver_params.yaml
-│   │   └── pick_place_params_real.yaml
-│   ├── launch/
-│   │   └── pick_place_real.launch.py
-│   └── robomaster_ep_driver/
-│       ├── ep_arm_driver.py
-│       └── calibrate_real.py
-│
-├── docs/
-│   └── real_machine_runbook.md
-│
-└── experiment_results/
-    ├── simulation/
-    └── real_robot/
-```
-
----
-
-# 5. 软件环境
-
-仿真开发环境：
-
-```text
-Ubuntu 22.04
-ROS 2 Humble
-Ignition Gazebo / Gazebo Fortress
-MoveIt 2
-OMPL
-ros2_control
-ros2_controllers
-gz_ros2_control
-Python 3
-```
-
-常用依赖：
+缺少常用 ROS 依赖时可安装：
 
 ```bash
 sudo apt update
-
-sudo apt install \
-    ros-humble-moveit \
-    ros-humble-ros-gz \
-    ros-humble-ros2-control \
-    ros-humble-ros2-controllers \
-    ros-humble-controller-manager
+sudo apt install ros-humble-ros-gz-bridge ros-humble-cv-bridge \
+  ros-humble-rqt-image-view
 ```
 
-设置 Gazebo：
+不要用普通 PyTorch 覆盖 Jetson 的 NVIDIA PyTorch 构建。
+
+### 4.2 真机
+
+- Jetson 上可用的 Python 3
+- RoboMaster Python SDK
+- `torch`
+- `ultralytics`
+- `opencv-python`
+- `numpy`
+- Jetson 与 RoboMaster EP 处于可通信网络
+
+运行前可以检查依赖：
 
 ```bash
-export GZ_VERSION=fortress
+python3 -c "import cv2, numpy, torch, ultralytics, robomaster; print('dependencies OK')"
 ```
 
----
+## 5. 运行仿真
 
-# 6. 构建项目
+进入 `digital` 目录并加载环境：
 
 ```bash
-mkdir -p ~/colcon_ws/src
-cd ~/colcon_ws/src
-
-git clone https://github.com/X-u-e-B-a-o/robomaster-pick-place-sim.git
+cd /path/to/robo_ex3-main/digital
+source ./activate_team21.sh
+colcon build --symlink-install --packages-select robomaster_pick_place_sim
 ```
 
-如需使用完整真机适配版本：
+运行正常六物体场景：
 
 ```bash
-cd robomaster-pick-place-sim
-git checkout real-ep-arm
+bash ./run_vision_sorting_improved.sh 21 nominal
 ```
 
-安装依赖并编译：
+第一个参数是随机种子。异常场景可分别运行：
 
 ```bash
-cd ~/colcon_ws
-
-source /opt/ros/humble/setup.bash
-
-rosdep install \
-    --from-paths src \
-    --ignore-src \
-    -r \
-    -y
-
-colcon build --symlink-install
-
-source install/setup.bash
+bash ./run_vision_sorting_improved.sh 21 unknown
+bash ./run_vision_sorting_improved.sh 21 empty
 ```
 
-检查 ROS 2 Python 节点：
+脚本会打开 Gazebo 和检测窗口。按 `Ctrl+C` 结束。主要输出位于：
+
+```text
+digital/logs/detections.jsonl
+digital/logs/continuous_grasp_<时间戳>_<进程号>.log
+```
+
+仿真参数集中在：
+
+```text
+digital/src/robomaster_pick_place_sim/config/vision_sorting_improved.yaml
+```
+
+默认验收参数为 `total_slot_count: 6`、`minimum_success_count: 5`、每类最多 3 个。
+
+## 6. 部署与运行真机
+
+### 6.1 从 Mac 上传到 Jetson
+
+在 Mac 终端进入真机目录，将 `<JETSON_IP>` 替换为 Jetson 当前 IP：
 
 ```bash
-ros2 pkg executables robomaster_pick_place_sim
+cd /path/to/robo_ex3-main/real/minified
+JETSON_HOST=adam@<JETSON_IP> bash ./install_mac.sh
 ```
 
-更新版本应至少包含：
+脚本会：
 
-```text
-pick_place_moveit
-calibrate_pose
-test_joints
-```
+1. 上传 `real/minified` 中的完整 V10 文件；
+2. 在 Jetson 上执行 Python 语法检查；
+3. 把旧目录改名为带时间戳的备份；
+4. 将新版本安装到 `/home/adam/Team21/yjh/real_grid_sorting_v10`。
 
----
+### 6.2 在 Jetson 上运行
 
-# 7. Gazebo 仿真场景
-
-仿真环境包括：
-
-- 地面；
-- 实验桌；
-- RoboMaster EP/Core 机械臂；
-- 夹爪；
-- 固定取物点 A；
-- 固定放置区域 B；
-- 标准目标物。
-
-当前基础场景中的目标物采用约 7 cm 立方体：
-
-| 参数 | 数值 |
-|---|---:|
-| 尺寸 | 0.07 × 0.07 × 0.07 m |
-| 质量 | 约 0.04 kg |
-| 摩擦系数 | 约 1.5 |
-| 初始位置 | A 点 |
-
-本任务不使用视觉定位，目标位置由参数配置预先给出。
-
----
-
-# 8. ros2_control
-
-仿真主要使用：
-
-```text
-joint_state_broadcaster
-arm_controller
-gripper_controller
-```
-
-机械臂控制关节：
-
-```text
-base_yaw_joint
-arm_lift_joint
-wrist_pitch_joint
-```
-
-MoveIt 轨迹接口：
-
-```text
-/arm_controller/follow_joint_trajectory
-```
-
-夹爪命令接口：
-
-```text
-/gripper_controller/commands
-```
-
-状态反馈：
-
-```text
-/joint_states
-```
-
-主任务节点在运动开始前等待完整 Joint State，避免 MoveIt 使用未初始化的关节状态。
-
----
-
-# 9. 核心程序
-
-## 9.1 `pick_place_moveit.py`
-
-负责：
-
-- 参数加载；
-- Controller/Action/Service 就绪检查；
-- Joint State 检查；
-- PlanningScene 初始化；
-- 解析 IK；
-- MoveIt FK 验证；
-- 整体路径预规划；
-- 机械臂轨迹执行；
-- 夹爪开合；
-- Collision Object Attach/Detach；
-- Joint Limit 检查；
-- 异常停止与安全恢复；
-- 五次 Trial 统计；
-- Log/CSV/JSON 持久化。
-
-## 9.2 `robot_kinematics.py`
-
-仿真机械臂采用三自由度解析模型：
-
-```text
-base_yaw_joint
-      ↓
-arm_lift_joint
-      ↓
-wrist_pitch_joint
-      ↓
-gripper_base_link
-```
-
-模型参数约为：
-
-```text
-Shoulder = (0.18, 0.16) m
-L1 = 0.28 m
-L2 = 0.22 m
-```
-
-## 9.3 `calibrate_pose.py`
-
-用于输入 `(x, y, z)` 并检查：
-
-```text
-Cartesian Target
-→ Analytical IK
-→ MoveIt Plan
-→ Move
-→ FK
-→ Joint Angles / End-Effector Pose
-```
-
-## 9.4 `test_joints.py`
-
-用于控制器 smoke test。该脚本绕过完整 MoveIt 碰撞规划，只应在调试阶段使用。
-
----
-
-# 10. 解析逆运动学
-
-对于目标：
-
-\[
-P=(x,y,z)
-\]
-
-水平径向距离为：
-
-\[
-r=\sqrt{x^2+y^2}
-\]
-
-底座偏航角为：
-
-\[
-\theta=\operatorname{atan2}(y,x)
-\]
-
-相对肩关节：
-
-\[
-d_x=r-x_s
-\]
-
-\[
-d_z=z-z_s
-\]
-
-\[
-d=\sqrt{d_x^2+d_z^2}
-\]
-
-可达条件：
-
-\[
-|L_1-L_2|\le d\le L_1+L_2
-\]
-
-程序同时检查：
-
-- 是否存在解析解；
-- 关节是否超限；
-- 夹爪方向是否有效；
-- 多解情况下的优选解。
-
----
-
-# 11. MoveIt FK 交叉验证
-
-正式实验之前，系统执行：
-
-```text
-Desired XYZ
-   ↓
-Analytical IK
-   ↓
-Joint Angles
-   ↓
-MoveIt /compute_fk
-   ↓
-Recovered XYZ
-   ↓
-Error Check
-```
-
-当前代码采用约 **5 mm** 的位置容差。
-
-如果解析运动学与 URDF/MoveIt 几何不一致，则在机械臂真正运动之前终止任务。
-
----
-
-# 12. 关节限位
-
-当前仿真软件限制：
-
-| Joint | Minimum | Maximum |
-|---|---:|---:|
-| `base_yaw_joint` | -3.14 rad | 3.14 rad |
-| `arm_lift_joint` | -0.80 rad | 1.00 rad |
-| `wrist_pitch_joint` | -1.50 rad | 1.50 rad |
-| `left_finger_joint` | 0 m | 0.045 m |
-| `right_finger_joint` | 0 m | 0.045 m |
-
----
-
-# 13. 仿真任务参数
-
-当前后期配置使用的主要参数为：
-
-| 参数 | 数值 |
-|---|---|
-| `num_cycles` | 5 |
-| `gripper_open` | 0.040 m |
-| `gripper_closed` | 0.006 m |
-| `max_velocity_scale` | 0.5 |
-| `max_acceleration_scale` | 0.5 |
-| `pick_point` | (0.600, 0.000, 0.350) |
-| `place_point` | (0.550, 0.250, 0.350) |
-| `pre_pick_point` | (0.596, 0.000, 0.399) |
-| `pre_place_point` | (0.546, 0.248, 0.395) |
-| `object_size` | 0.070 m |
-| `attach_object` | true |
-| `log_dir` | results |
-
----
-
-# 14. 仿真关键点静态运动学结果
-
-根据当前参数和仓库中的解析运动学模型，四个关键点可得到以下静态解：
-
-| 目标点 | XYZ / m | Yaw / rad | Lift / rad | Wrist / rad | 解析 IK | 关节限位 |
-|---|---|---:|---:|---:|---|---|
-| Pick A | (0.600, 0.000, 0.350) | 0.0000 | -0.7748 | 0.8015 | Pass | Pass |
-| Place B | (0.550, 0.250, 0.350) | 0.4266 | -0.7537 | 0.7611 | Pass | Pass |
-| Pre-Pick | (0.596, 0.000, 0.399) | 0.0000 | -0.7736 | 0.5752 | Pass | Pass |
-| Pre-Place | (0.546, 0.248, 0.395) | 0.4264 | -0.7548 | 0.5573 | Pass | Pass |
-
-因此，**当前四个预设关键点在解析运动学模型下均可达，并且关节解落在软件限制范围内**。
-
-注意：该表属于**静态运动学验证结果**，不是物理抓取成功率。
-
----
-
-# 15. 完整路径预检查与任务状态机
-
-正式开始五次循环前，代码会首先进行完整路径 `plan_only`：
-
-```text
-Home
-→ Pre-Pick
-→ Pick
-→ Pre-Pick
-→ Pre-Place
-→ Place
-→ Pre-Place
-→ Home
-```
-
-共检查 7 段路径。
-
-单次正式 Trial：
-
-```text
-Home
-→ Pre-Pick
-→ Pick
-→ Close Gripper
-→ Attach Object
-→ Lift
-→ Pre-Place
-→ Place
-→ Detach Object
-→ Release
-→ Withdraw
-→ Home
-```
-
-任一关键步骤发生 `TaskError`，该 Trial 应被判定为失败，并进入停止/恢复逻辑。
-
----
-
-# 16. 仿真实验结果
-
-## 16.1 软件与静态验收结果
-
-| 验收项 | 当前结果 |
-|---|---|
-| 单 Launch 完整启动架构 | 已实现 |
-| 5 次循环逻辑 | 已实现 |
-| ≥4/5 自动 Pass 判定 | 已实现 |
-| A 点解析 IK | Pass |
-| B 点解析 IK | Pass |
-| Pre-Pick 解析 IK | Pass |
-| Pre-Place 解析 IK | Pass |
-| 四个关键点关节限位 | Pass |
-| MoveIt FK 交叉验证 | 已实现 |
-| 7 段 plan-only 预检查 | 已实现 |
-| PlanningScene 桌面/目标物 | 已实现 |
-| Object Attach/Detach | 已实现 |
-| 关节超限安全处理 | 已实现 |
-| 不可达目标处理 | 已实现 |
-| 错误日志 | 已实现 |
-| 轨迹 CSV | 已实现 |
-| 结果 JSON | 已实现 |
-
-## 16.2 连续 5 次仿真验收表
-
-当前已上传材料及可读取仓库内容中，**没有找到一份正式运行生成的五次 Trial 结果 JSON/CSV/log**。因此，五次 Trial 的实际结果不能从代码配置反推。
-
-| Trial | 任务配置 | 关键点静态可达性 | 实际抓取运行证据 | 实际 Result |
-|---:|---|---|---|---|
-| 1 | 已配置 | Pass | 未发现对应正式 Trial 运行记录 | **Not verified** |
-| 2 | 已配置 | Pass | 未发现对应正式 Trial 运行记录 | **Not verified** |
-| 3 | 已配置 | Pass | 未发现对应正式 Trial 运行记录 | **Not verified** |
-| 4 | 已配置 | Pass | 未发现对应正式 Trial 运行记录 | **Not verified** |
-| 5 | 已配置 | Pass | 未发现对应正式 Trial 运行记录 | **Not verified** |
-
-当前可以得出的正式结论是：
-
-```text
-Static kinematic feasibility: PASS
-Joint-limit feasibility: PASS
-Five-trial execution framework: IMPLEMENTED
-Actual 5-trial success count: NOT AUDITABLE FROM CURRENT SAVED RESULTS
-Course simulation acceptance (≥4/5): CANNOT BE CLAIMED FROM CURRENT EVIDENCE
-```
-
-这里的 `Not verified` 不是程序失败，而是表示当前提交材料中缺少可独立审计的对应运行结果。
-
----
-
-# 17. 仿真启动方法
+Jetson 连接 RoboMaster EP 的 Wi-Fi 后，在 Jetson 本机终端执行：
 
 ```bash
-source /opt/ros/humble/setup.bash
-source ~/colcon_ws/install/setup.bash
-
-export GZ_VERSION=fortress
-
-ros2 launch robomaster_pick_place_sim pick_place_moveit.launch.py
+cd /home/adam/Team21/yjh/real_grid_sorting_v10
+bash ./run_grasp_v10.sh
 ```
 
-带 RViz：
+启动时应看到：
+
+```text
+BUILD: RESTORED-MOTION-COUNT-ONLY
+```
+
+运行脚本会先检查 `vision/grasp_v10.py` 的语法，再用以下正式参数启动：
+
+```text
+--target auto --sort-mode --max-items 6
+```
+
+真机日志自动保存在：
+
+```text
+/home/adam/Team21/yjh/real_grid_sorting_v10/logs/grasp_v10_<时间戳>.log
+```
+
+### 6.3 低风险检查
+
+只验证识别、目标选择和靠近，不闭合夹爪或分类放置：
 
 ```bash
-ros2 launch robomaster_pick_place_sim \
-    pick_place_moveit.launch.py \
-    use_rviz:=true
+cd /home/adam/Team21/yjh/real_grid_sorting_v10
+python3 ./vision/grasp_v10.py --target auto --sort-mode --nav-only
 ```
 
-分步调试：
+查看所有可调参数：
 
 ```bash
-ros2 launch robomaster_pick_place_sim pick_place_gazebo.launch.py
+python3 ./vision/grasp_v10.py --help
 ```
 
-另一终端：
+## 7. 异常与停止策略
+
+- 多目标同时出现：优先选择 `bottom_y` 最大的最近目标；
+- 抓取失败：打开夹爪、回到观察姿态并后退，再继续搜索；
+- 黑色标记在放置前不可见：先尝试重新找到标记，失败则不开始横移；
+- 横移时标记图像过期：立即停车，不释放仍夹持的物体；
+- 未确认到胶带边界：停车并保持夹持，避免在错误位置放置；
+- 搜索完成一次完整往返且无目标：正常结束任务；
+- 用户停止：按检测窗口中的 `Q`、`Esc`，或在终端按 `Ctrl+C`。
+
+## 8. 测试
+
+仓库中的仿真纯 Python 测试覆盖检测稳定性、类别身份、未知目标、空场景、夹爪阶段动作、位姿闭环、分类区域、启动同步和网球专项模式。
 
 ```bash
-ros2 run robomaster_pick_place_sim test_joints
+python3 -m unittest discover -s digital/tests -p 'test_*.py' -v
 ```
 
-检查控制器：
-
-```bash
-ros2 control list_controllers
-```
-
----
-
-# 18. 仿真输出
-
-程序设计为每次运行生成：
+当前源码静态测试结果：
 
 ```text
-results/
-├── run_<timestamp>.log
-├── run_<timestamp>_trajectory.csv
-└── run_<timestamp>_results.json
+Ran 68 tests
+OK
 ```
 
-典型轨迹字段：
+这些测试不替代 Gazebo 完整运行和真机实验。
 
-```text
-timestamp
-cycle
-step
-base_yaw
-arm_lift
-wrist_pitch
-left_finger
-right_finger
-ee_x
-ee_y
-ee_z
-success
-```
+## 9. 结果口径与当前限制
 
-结果 JSON 应记录：
+- 仿真控制器按 6 个物体、至少 5 个成功进行结果判定，并记录检测和状态日志。
+- 真机 V10 的 `sorted_count` 表示完成的抓放动作次数，不代表已确认的独立物体数量。
+- 真机放置后没有独立的视觉验收，因此 `PLACEMENT-EVENT-n` 是动作记录，不能单独证明物体已正确落入分类区。
+- 真机任务以“完整往返搜索后无可执行目标”为结束条件，`--max-items 6` 不作为强制退出条件。
+- 仓库未提交运行生成的 `logs/`、演示视频或正式验收统计；最终实验成绩应以现场视频、人工核验和对应运行日志为准。
+- 仿真具备单 Launch 入口；当前真机正式入口是 RoboMaster SDK 脚本，不是 ROS 2 Launch。
 
-```text
-num_cycles
-successes
-failures
-passed
-cycles
-duration_s
-error
-params
-log_file
-trajectory_file
-```
+## 10. 维护说明
 
-验收逻辑：
+- 当前正式版本以 `ACTIVE_VERSION.md` 和 `real/minified/VERSION.txt` 为准。
+- 修改真机参数前先备份可工作的 `real/minified`，并优先使用 `--nav-only` 检查视觉与方向。
+- 模型、抓取 profile 和主程序应作为同一版本一起部署，避免标定与权重不匹配。
+- 不要把 `test/` 或 `try/` 中的历史脚本覆盖到正式目录。
 
-```text
-passed = successes >= 0.8 * num_cycles
-```
+## License
 
-对于 5 次循环，即至少 4 次成功。
-
----
-
-# 19. 异常与安全处理
-
-| 异常 | 检测方式 | 系统响应 |
-|---|---|---|
-| 目标不可达 | Analytical IK | 启动前中止 |
-| 无合法逆解 | IK + Joint Limit | 输出错误并停止 |
-| IK/URDF 不一致 | MoveIt FK | 中止预检 |
-| 路径发生碰撞 | MoveIt Planning | 不执行 |
-| 无合法路径 | MoveIt Error Code | Trial Fail |
-| Joint 超限 | Joint State Check | Stop |
-| Controller 未就绪 | Startup Check | 不开始 |
-| Joint State 不完整 | Startup Check | 不开始 |
-| 执行失败 | Action Result | Stop + Record |
-| 用户中断 | Ctrl+C / Exception | Stop + Recovery |
-
-任务层恢复流程：
-
-```text
-Error
- ↓
-Stop Current Trajectory
- ↓
-Record Failure
- ↓
-Attempt Home
- ↓
-If Home Fails
- ↓
-Remain Stopped
-```
-
----
-
-# 20. 真机：仓库中的 RoboMaster EP 适配方案
-
-`real-ep-arm` 分支实现了一个 RoboMaster EP ROS 2 兼容层。
-
-对上层提供/模拟的接口包括：
-
-```text
-/joint_states
-/arm_controller/follow_joint_trajectory
-/gripper_controller/commands
-/controller_manager/list_controllers
-/ep_arm/freeze
-```
-
-因此高层任务仍可使用：
-
-```text
-pick_place_moveit
-```
-
-而设备执行端由：
-
-```text
-ep_arm_driver
-→ RoboMaster SDK
-→ Physical RoboMaster EP
-```
-
-完成。
-
----
-
-# 21. 真机运动映射
-
-RoboMaster EP 实际机械臂的运动结构不同于仿真中的 3-DOF 模型，因此真机驱动将 MoveIt 轨迹转换为二维末端坐标。
-
-仿真 FK：
-
-\[
-x_s =
-x_0+
-L_1\cos q_1+
-L_2\cos(q_1+q_2)
-\]
-
-\[
-z_s =
-z_0-
-L_1\sin q_1-
-L_2\sin(q_1+q_2)
-\]
-
-标定后映射：
-
-\[
-x_r=k_xx_s+b_x
-\]
-
-\[
-y_r=k_zz_s+b_z
-\]
-
-最后通过 RoboMaster SDK：
-
-```text
-robotic_arm.moveto(x, y)
-```
-
-向真实机械臂发送运动目标。
-
----
-
-# 22. 真机双锚点标定
-
-仓库默认映射示例为：
-
-| 点 | 仿真平面坐标 | 真机坐标 |
-|---|---|---|
-| Anchor A | (0.60, 0.32) m | (60, 40) mm |
-| Anchor B | (0.64, 0.35) m | (170, 60) mm |
-| Home | — | (32, 114) mm |
-
-对应示例映射：
-
-\[
-x_r = 2750x_s-1590
-\]
-
-\[
-y_r \approx 666.67z_s-173.33
-\]
-
-这些值仅是仓库中的默认标定关系。正式真机实验应使用现场标定得到的 `anchor1_real`、`anchor2_real` 和 `home_real`。
-
-标定工具：
-
-```bash
-ros2 run robomaster_ep_driver calibrate_real
-```
-
-典型交互命令：
-
-```text
-pos
-moveto <x> <y>
-move <dx> <dy>
-open
-close
-anchor1
-anchor2
-home
-show
-save
-quit
-```
-
----
-
-# 23. RoboMaster EP 真机参数
-
-仓库后期真机参数主要为：
-
-| 参数 | 数值 |
-|---|---|
-| `num_cycles` | 5 |
-| `gripper_open` | 0.040 m |
-| `gripper_closed` | 0.006 m |
-| `max_velocity_scale` | 0.2 |
-| `max_acceleration_scale` | 0.2 |
-| `pick_point` | (0.60, 0.00, 0.32) |
-| `place_point` | (0.64, 0.00, 0.35) |
-| `pre_pick_point` | (0.60, 0.00, 0.38) |
-| `pre_place_point` | (0.62, 0.00, 0.38) |
-| `home_joints` | [0.0, -0.751, 0.385] |
-| `object_size` | 0.07 m |
-| `grip_settle_s` | 2.5 s |
-| `log_dir` | results_real |
-
-默认真实工作空间保护：
-
-```text
-x ∈ [0, 220] mm
-y ∈ [0, 150] mm
-```
-
-轨迹 waypoint 发送前先完成坐标转换和边界检查。
-
----
-
-# 24. 真机 Dry-Run 与启动
-
-正式连接真机前应先运行：
-
-```bash
-ros2 launch robomaster_ep_driver \
-    pick_place_real.launch.py \
-    dry_run:=true
-```
-
-Dry-Run 用于检查：
-
-```text
-ROS 2 interfaces
-MoveIt planning
-IK / FK
-Task state machine
-simulation-to-real coordinate mapping
-workspace limits
-```
-
-但不应把 Dry-Run 当成物理抓取成功。
-
-正式运行：
-
-```bash
-ros2 launch robomaster_ep_driver pick_place_real.launch.py
-```
-
-软件冻结：
-
-```bash
-ros2 service call \
-    /ep_arm/freeze \
-    std_srvs/srv/SetBool \
-    "{data: true}"
-```
-
-解除：
-
-```bash
-ros2 service call \
-    /ep_arm/freeze \
-    std_srvs/srv/SetBool \
-    "{data: false}"
-```
-
-软件冻结不能替代硬件断电/急停。
-
----
-
-# 25. 真机安全要求
-
-第一次真实运动必须低速进行，并建议双人操作：
-
-```text
-Operator A:
-运行程序、观察日志
-
-Operator B:
-观察机械臂和工作空间
-负责急停
-```
-
-启动前检查：
-
-- 底座固定；
-- 电源稳定；
-- USB/串口/网络通信正常；
-- 夹爪安装牢固；
-- 急停/断电装置有效；
-- 工作空间无人员身体或无关障碍物；
-- A/B 已标记；
-- Home 已验证；
-- 安全高度已确认；
-- 目标物质量符合要求；
-- 关节与工作空间限制有效。
-
----
-
-# 26. 真机实验结果
-
-## 26.1 真机软件准备状态
-
-| 验收项 | 当前证据状态 |
-|---|---|
-| 真机设备适配层 | 已实现 RoboMaster EP adapter |
-| FollowJointTrajectory 兼容接口 | 已实现 |
-| `/joint_states` | 已实现 |
-| 夹爪命令桥接 | 已实现 |
-| Controller 状态兼容 | 已实现 |
-| 真机 A/B 参数 | 已配置 |
-| Home 参数 | 已配置 |
-| 双锚点标定工具 | 已实现 |
-| Dry-Run | 已实现 |
-| 工作空间边界保护 | 已实现 |
-| Freeze | 已实现 |
-| 低速参数 | 已配置 |
-| 5 次循环逻辑 | 已实现 |
-| `results_real` 日志结构 | 已实现 |
-
-## 26.2 连续 5 次真机验收表
-
-当前已上传材料中，可以看到 Jetson/Ubuntu ROS 2 工作空间的真机环境调试痕迹，但**未发现能够逐 Trial 核验的五次真实抓取结果 JSON、CSV、完整执行日志或对应连续验收视频数据**。
-
-因此表格按实际证据状态填写如下：
-
-| Trial | Home | Pick A | Grasp | Transport | Place B | Safe Return | 实际 Result |
-|---:|---|---|---|---|---|---|---|
-| 1 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | **Not verified** |
-| 2 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | **Not verified** |
-| 3 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | **Not verified** |
-| 4 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | **Not verified** |
-| 5 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | 无可核验 Trial 记录 | **Not verified** |
-
-当前真机结论：
-
-```text
-Real-hardware control architecture: IMPLEMENTED
-Real-hardware parameterization: IMPLEMENTED
-Dry-run / workspace safety logic: IMPLEMENTED
-Actual physical five-trial result: NOT AUDITABLE FROM CURRENT SAVED RESULTS
-Course real-robot acceptance (≥4/5): CANNOT BE CLAIMED FROM CURRENT EVIDENCE
-```
-
----
-
-# 27. 课程要求的真机平台与仓库真机分支的差异
-
-课程指导书给出的真机平台为：
-
-```text
-Jetson Orin
-+
-mechArm 270
-```
-
-而仓库中能够完整确认的专门真机适配分支为：
-
-```text
-real-ep-arm
-→ RoboMaster EP
-```
-
-因此二者不能在实验报告中混写。
-
-如果 RoboMaster EP 是经课程教师批准的替代平台，应明确注明平台替换。
-
-如果课程严格要求 mechArm 270，则 `real-ep-arm` 应描述为：
-
-> **Sim-to-Real 接口复用和硬件适配方法验证**
-
-而不能直接作为 “mechArm 270 五次真机验收结果”。
-
-现有上传的一张 Jetson/Ubuntu 终端记录中出现过 `mycobot_interfaces` 工作空间配置，说明项目曾进行 mechArm/myCobot ROS 2 环境调试；但该记录同时显示对应 `local_setup.bash` 未找到，因此它属于环境调试证据，不等同于完成真实五次抓取验收。
-
----
-
-# 28. 仿真与真机结果文件
-
-仿真：
-
-```text
-results/
-├── run_<timestamp>.log
-├── run_<timestamp>_trajectory.csv
-└── run_<timestamp>_results.json
-```
-
-RoboMaster EP 真机：
-
-```text
-results_real/
-├── run_<timestamp>.log
-├── run_<timestamp>_trajectory.csv
-└── run_<timestamp>_results.json
-```
-
-正式提交建议将最终验收结果从临时输出目录复制到版本控制目录：
-
-```text
-experiment_results/
-├── simulation/
-│   ├── final_run.log
-│   ├── final_run_trajectory.csv
-│   └── final_run_results.json
-│
-└── real_robot/
-    ├── final_run.log
-    ├── final_run_trajectory.csv
-    └── final_run_results.json
-```
-
-这样可以保证 README 中的每一个实验数字都能回溯到具体运行记录。
-
----
-
-# 29. 当前仓库需要统一的关键问题
-
-## 29.1 B 点显示位置与任务参数
-
-部分后期任务参数为：
-
-```text
-place_point = (0.55, 0.25, 0.35)
-```
-
-但部分 Gazebo world 中绿色 B Marker 使用不同平面位置。
-
-正式提交前应确保：
-
-```text
-Gazebo B marker
-=
-pick_place_params.yaml place_point
-=
-MoveIt task target
-```
-
-否则视觉上的 B 区域与程序实际放置目标不一致。
-
-## 29.2 桌面几何
-
-部分版本中：
-
-```text
-MoveIt PlanningScene table
-```
-
-与：
-
-```text
-Gazebo SDF table
-```
-
-使用了不同的中心位置和尺寸。
-
-正式版必须统一，否则可能出现 Gazebo 实际碰撞与 MoveIt 碰撞模型不一致。
-
-## 29.3 `setup.py`
-
-根目录历史版本与 `lpx/setup.py` 的节点注册曾存在差异。
-
-最终版本应确保至少正确注册：
-
-```text
-pick_place_moveit
-calibrate_pose
-test_joints
-```
-
-## 29.4 多套实现
-
-提交前应明确：
-
-```text
-canonical branch
-canonical config
-canonical launch
-canonical result files
-```
-
-避免老师无法判断根目录、`lpx/` 或其他分支哪一套是最终实验。
-
----
-
-# 30. 实验验收判定原则
-
-## 仿真
-
-课程通过条件：
-
-```text
-5 trials
-successes >= 4
-no dangerous collision
-no joint-limit violation
-unreachable target handled safely
-trajectory/result/error logs saved
-```
-
-## 真机
-
-课程通过条件：
-
-```text
-5 trials
-successes >= 4
-object placed in designated region
-no collision / limit / dangerous motion
-failure → safe stop or safe return
-same high-level task logic reused
-all operators complete safety checks
-```
-
-只有真实运行数据满足上述条件，才应在 README 中写：
-
-```text
-PASS
-```
-
----
-
-# 31. 推荐正式实验记录格式
-
-当最终结果文件提交后，推荐保留以下字段：
-
-```text
-run_id
-git_commit
-branch
-parameter_file
-robot_platform
-trial
-start_time
-duration_s
-home_success
-pick_success
-grasp_success
-transport_success
-place_success
-return_success
-collision
-joint_limit_violation
-error
-result
-```
-
-这比只写 “5/5” 更具有可复现性和审计价值。
-
----
-
-# 32. 最终提交前复现流程
-
-建议在干净工作空间重新执行：
-
-```bash
-cd ~/colcon_ws
-
-rm -rf build install log
-
-source /opt/ros/humble/setup.bash
-
-rosdep install \
-    --from-paths src \
-    --ignore-src \
-    -r \
-    -y
-
-colcon build --symlink-install
-
-source install/setup.bash
-```
-
-随后依次完成：
-
-```text
-1. Controller Test
-2. MoveIt Test
-3. Pose Calibration
-4. Simulation Preflight
-5. Five-Trial Simulation
-6. Abnormal-Condition Test
-7. Save Simulation Result Files
-8. Hardware Calibration
-9. Real Dry-Run
-10. Low-Speed Real Trial
-11. Five-Trial Real Experiment
-12. Emergency-Stop Test
-13. Save Real Result Files
-14. Commit Final Evidence
-```
-
----
-
-# 33. 提交材料对应关系
-
-| 课程要求 | 本仓库对应内容 |
-|---|---|
-| ROS 2 程序 | `robomaster_pick_place_sim` / driver package |
-| Launch | Gazebo / MoveIt / real-hardware launch |
-| 参数文件 | `pick_place_params*.yaml` |
-| 机械臂模型 | URDF + meshes |
-| 仿真场景 | SDF world |
-| 取物点 A | `pick_point` |
-| 放置点 B | `place_point` |
-| 安全高度 | `pre_pick_point` / `pre_place_point` |
-| 轨迹记录 | trajectory CSV |
-| 执行结果 | results JSON |
-| 错误日志 | `.log` |
-| 仿真视频 | 正式五次连续实验 |
-| 真机视频 | 正式五次连续实验 |
-| 异常记录 | unreachable / planning / emergency test |
-| 简要实验报告 | 项目实验报告 |
-| 项目代码 | GitHub Repository |
-
----
-
-# 34. 项目总结
-
-本项目已经建立了一套较完整的机械臂固定点抓取软件体系，包括：
-
-```text
-ROS 2 Humble
-Gazebo Fortress
-MoveIt 2
-OMPL
-ros2_control
-Analytical IK
-MoveIt FK Cross-Validation
-PlanningScene
-Preflight Planning
-Pick-and-Place State Machine
-Gripper Control
-Attach / Detach
-Failure Handling
-Log / CSV / JSON
-Hardware Adapter
-Sim-to-Real Interface Reuse
-```
-
-当前代码能够明确证明的是：
-
-- 仿真 A/B 与安全中间点具有合法解析 IK；
-- 关键关节角位于软件限制范围内；
-- 完整五次抓取验收逻辑已经实现；
-- 轨迹、结果与错误日志保存机制已经实现；
-- 真机设备适配、标定、Dry-Run 与安全边界机制已经建立。
-
-当前材料**不能严谨证明**的是：
-
-- 某一次正式仿真实验已经取得 4/5 或 5/5；
-- 某一次正式真机实验已经取得 4/5 或 5/5。
-
-因此，本 README 不通过推测填造实验成功数据。正式实验结果应以提交的 `run_*_results.json`、对应轨迹、日志和连续视频为最终依据。
-
----
-
-## Repository
-
-```text
-https://github.com/X-u-e-B-a-o/robomaster-pick-place-sim
-```
-
+本仓库采用 MIT License，详见 `LICENSE`。
