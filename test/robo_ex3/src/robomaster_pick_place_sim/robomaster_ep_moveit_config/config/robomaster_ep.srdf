@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<!-- MoveIt 语义配置: 规划组 / 末端执行器 / 自碰撞矩阵 / 预置位姿 -->
+<robot name="robomaster_ep_core">
+
+  <!-- 手臂规划组: 底盘偏航 + 抬臂 + 腕部俯仰 -->
+  <group name="arm">
+    <chain base_link="base_link" tip_link="gripper_base_link"/>
+  </group>
+
+  <!-- 夹爪规划组: 两个手指(实际执行时通过 gripper_controller 话题直接控制) -->
+  <group name="gripper">
+    <joint name="left_finger_joint"/>
+    <joint name="right_finger_joint"/>
+  </group>
+
+  <end_effector name="gripper" parent_link="gripper_base_link" group="gripper" parent_group="arm"/>
+
+  <!-- 相邻连杆与手指之间不做碰撞检测 -->
+  <disable_collisions link1="base_link" link2="yaw_link" reason="Adjacent"/>
+  <disable_collisions link1="yaw_link" link2="upper_arm_link" reason="Adjacent"/>
+  <disable_collisions link1="upper_arm_link" link2="wrist_link" reason="Adjacent"/>
+  <disable_collisions link1="wrist_link" link2="gripper_base_link" reason="Adjacent"/>
+  <disable_collisions link1="gripper_base_link" link2="left_finger_link" reason="Adjacent"/>
+  <disable_collisions link1="gripper_base_link" link2="right_finger_link" reason="Adjacent"/>
+  <disable_collisions link1="left_finger_link" link2="right_finger_link" reason="Fingers"/>
+
+  <!-- 回零位姿: 上臂上仰到极限(-0.8), 前臂回折, 整臂高悬于桌面之上
+       (FK 实测 EE=(0.325, 0, 0.585), 不经过桌面区域 x>=0.38) -->
+  <group_state name="home" group="arm">
+    <joint name="base_yaw_joint" value="0"/>
+    <joint name="arm_lift_joint" value="-0.8"/>
+    <joint name="wrist_pitch_joint" value="-1.0"/>
+  </group_state>
+</robot>

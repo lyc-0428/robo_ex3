@@ -1,0 +1,23 @@
+# 抓取任务参数 (可在 launch 时用 params_file:=/path/to/xxx.yaml 覆盖)
+pick_place_node:
+  ros__parameters:
+    num_cycles: 5               # 连续抓取次数 (验收: 5 次至少成功 4 次)
+    gripper_open: 0.040         # 手指开度指令 [m]
+    gripper_closed: 0.006       # 夹紧开度指令 [m], 对应夹住 7cm 立方体
+    max_velocity_scale: 0.5     # 速度比例 (0~1)
+    max_acceleration_scale: 0.5 # 加速度比例 (0~1)
+
+    # 几何说明 (解析逆解 + FK 校验, 见 pick_place_moveit.py 的 run() 预检查):
+    # 臂为 3-DOF 平面臂(绕 yaw 轴可转), 肩在 (0.18,0,0.16), L1=0.28, L2=0.22。
+    # 桌面 x∈[0.38,1.18], 顶面 z=0.30 — 上臂须 ≥43° 上仰才不撞桌沿,
+    # 故预抓取/预放置点与抓取点取相同 lift 角, 仅腕部差 (纯腕部接近/撤离)。
+    # 抓取点手指近水平 (倾角 <2°), 手指箱底距桌面 ~3.1cm。
+    pick_point: {x: 0.60, y: 0.0, z: 0.35}       # 取物点 A (物体中心上方 1cm, r=0.60)
+    place_point: {x: 0.55, y: 0.25, z: 0.35}     # 放置点 B (r=0.604, 方位 24.4°)
+    pre_pick_point: {x: 0.596, y: 0.0, z: 0.399}  # 预抓取点: 手指 11°上仰, 指尖高于物体顶
+    pre_place_point: {x: 0.546, y: 0.248, z: 0.395}  # 预放置点: 同 pre_pick 形状
+
+    attach_object: true         # 夹紧后把物体 attach 到夹爪, 运输不掉落
+    object_size: 0.07           # 目标物体立方体边长 [m]
+    table: {center: [0.78, 0.0, 0.15], size: [0.80, 0.70, 0.30]}  # 碰撞场景中的桌面
+    log_dir: results            # 日志/轨迹/结果输出目录 (相对运行目录)

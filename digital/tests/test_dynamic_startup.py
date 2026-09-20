@@ -30,6 +30,23 @@ class DynamicStartupTests(unittest.TestCase):
         self.assertLess(barrier, scene)
         self.assertIn('touch "${SCENE_READY_FILE}"', source[scene:])
 
+    def test_improved_runner_recovers_from_stale_gazebo_worlds(self):
+        source = (ROOT / "run_vision_sorting_improved.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("cleanup_stale_runtime", source)
+        self.assertIn('RUN_PARTITION="${ROBO_EX3_PARTITION:-team21_lyc_$$}"', source)
+        self.assertIn('setsid ros2 launch', source)
+        self.assertNotIn('exec ros2 launch', source)
+
+    def test_nominal_run_shows_local_detection_view_by_default(self):
+        source = (ROOT / "run_vision_sorting_improved.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('elif [[ "${SCENARIO}" == "nominal" ]]', source)
+        self.assertIn('SHOW_IMAGE="true"', source)
+        self.assertIn('SHOW_IMAGE="${ROBO_EX3_SHOW_IMAGE}"', source)
+
 
 if __name__ == "__main__":
     unittest.main()

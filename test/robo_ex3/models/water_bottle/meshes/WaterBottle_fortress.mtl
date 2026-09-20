@@ -1,0 +1,8 @@
+newmtl BottleMat
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.15 0.15 0.15
+Ns 32.0
+d 1.0
+illum 2
+map_Kd ../materials/textures/WaterBottle_BottleMat_Diffuse.png

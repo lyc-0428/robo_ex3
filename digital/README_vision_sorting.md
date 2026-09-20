@@ -19,38 +19,55 @@ sudo apt install ros-humble-ros-gz-bridge ros-humble-cv-bridge \
 
 Activate the existing environment before installing a missing Ultralytics
 package. Keep NumPy below 2 for ROS Humble `cv_bridge` compatibility, and do
-not replace the NVIDIA Jetson PyTorch build:
+not replace the NVIDIA Jetson PyTorch build.
 
 ```bash
-source /home/nvidia/Team21/Team21/bin/activate
+source /home/adam/Team21/lyc/robo_ex3/activate_team21.sh
 python -m pip install 'numpy<2' 'ultralytics<9'
 ```
 
 ## Build and run
 
 ```bash
-cd /home/nvidia/Team21/lyc/digital
-source /opt/ros/humble/setup.bash
-source /home/nvidia/ros2_ws/install/setup.bash
-source /home/nvidia/Team21/Team21/bin/activate
+cd /home/adam/Team21/lyc/robo_ex3
+source activate_team21.sh
 colcon build --symlink-install --packages-select robomaster_pick_place_sim
-bash run_vision_sorting.sh
+bash run_vision_sorting_improved.sh 21 nominal
 ```
 
-Pass an integer seed to reproduce a scene:
+For the current placement-only debugging phase, use the dedicated entry
+point below. It is now a frozen, self-contained copy of the earlier 58-test
+snapshot: 5.4 cm tennis collision, 93% visual scale, 0.65-to-0.30 m placement
+schedule, 1.20 x 0.80 m markers, and the pre-coarse-alignment turn behavior.
+It spawns six tennis balls, rejects bottle-class detections, and does not
+require both categories for completion:
 
 ```bash
-bash run_vision_sorting.sh 21
+bash run_tennis_placement_debug.sh 21
 ```
 
-The default is a new timestamp seed on every run. The script opens Gazebo and
-`rqt_image_view`, runs all four sorts, pauses the world, and leaves both windows
-open for inspection. Press Ctrl+C in the launch terminal to close them.
+Its controller modules live under `actions/tennis_debug`, and it has separate
+launch, parameter, world, model, log, and transport-partition resources. Future
+nominal bottle changes therefore do not alter the tennis debug behavior.
+
+The improved scripts open Gazebo and `rqt_image_view` on the Jetson's local
+screen. Press Ctrl+C in the launch terminal to close them. The full six-object
+experiment remains available through the explicit `nominal` command above.
+The nominal run shows annotated detections by default; set
+`ROBO_EX3_SHOW_IMAGE=false` only when GPU/RAM pressure requires it.
+
+The current nominal scene uses pale-blue bottles. Bottle detections have a
+`0.40` final threshold; a bottle ROI containing at least 18% pale-blue pixels
+receives a bounded `+0.50` color-evidence bonus. Detection logs preserve the
+raw score, pale-blue fraction, applied bonus, and adjusted score. Successful
+placement distances are `0.85, 0.73, 0.61, 0.49, 0.37, 0.25 m`. Every round
+returns to the one world-frame home pose captured at startup before starting
+the next visual acquisition.
 
 Gazebo starts directly in continuous dynamic mode. The action process loads
 and activates the joint-state, calibrated-position-hold, and wheel controllers
 through the normal controller-manager update loop; it never advances a paused
-world with `multi_step`. The four task objects are spawned only after the hold
+world with `multi_step`. The task objects are spawned only after the hold
 and wheel controllers report ready, so their creation cannot overlap robot
 initialization.
 
@@ -82,7 +99,7 @@ Fortress, open the plugin menu, add **Image Display**, and select
 The same raw image and its rate can be checked from a second Jetson terminal:
 
 ```bash
-cd /home/nvidia/Team21/lyc/digital
+cd /home/adam/Team21/lyc/robo_ex3
 source activate_team21.sh
 ros2 topic hz /camera/image_raw
 ros2 run rqt_image_view rqt_image_view /camera/image_raw
